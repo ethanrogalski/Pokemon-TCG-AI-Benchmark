@@ -1,10 +1,70 @@
-# Python
-backend/venv/
-backend/__pycache__/
-backend/*.pyc
-backend/.env
+# Compiled source
+*.com
+*.class
+*.dll
+*.exe
+*.o
+*.so
 
-# Next.js
-frontend/.next/
-frontend/node_modules/
-frontend/.env*
+# Packages
+*.7z
+*.dmg
+*.gz
+*.iso
+*.jar
+*.rar
+*.tar
+*.zip
+
+# Logs and databases
+*.log
+*.sql
+*.sqlite
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Environment and IDE
+*.env
+.vscode
+
+# Claude Code artifacts
+.claude/
+
+*.md
+
+# Python
+/__pycache__
+/env
+blackbox.py
+__pycache__/blackbox.cpython-311.pyc
+env/bin/
+env/lib/python3.11/
+
+# Node.js
+node_modules
+ptcg-server/node_modules
+ptcg-play/node_modules
+ptcg-server/node_modules/.cache
+ptcg-server/.nyc_output
+ptcg-server/.nyc_output/processinfo/index.json
+
+# Output
+ptcg-server/output
+ptcg-server/dist
+
+# Specific Sets
+ptcg-server/src/sets/set-test/
+/.kiro
+MEMORY_OPTIMIZATION_GUIDE.md
+frontend-cleanup-report.md
+ptcg-server/implementedCardIds.json
+ptcg-server/generate-implemented-card-ids-json.js
+fetch-set-cards.sh
+fetch-all-sets.sh
