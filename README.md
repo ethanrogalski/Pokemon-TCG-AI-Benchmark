@@ -51,7 +51,13 @@ SERVER_PASSWORD=''
 SERVER_SECRET='!secret!'
 ```
 
-3. Start the server.
+3. Compile the TypeScript source (added step — not in the original README).
+
+```
+npm run compile
+```
+
+4. Start the server.
 
 ```
 npm run start
