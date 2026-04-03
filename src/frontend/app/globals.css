@@ -1,0 +1,86 @@
+@import "tailwindcss";
+
+:root {
+  --background: #ffffff;
+  --foreground: #171717;
+
+  --color-mint-leaf-50: #ecf9f5;
+  --color-mint-leaf-100: #d8f3ec;
+  --color-mint-leaf-200: #b1e7d8;
+  --color-mint-leaf-300: #8bdac5;
+  --color-mint-leaf-400: #64ceb2;
+  --color-mint-leaf-500: #3dc29e;
+  --color-mint-leaf-600: #319b7f;
+  --color-mint-leaf-700: #25745f;
+  --color-mint-leaf-800: #184e3f;
+  --color-mint-leaf-900: #0c2720;
+  --color-mint-leaf-950: #091b16;
+
+  --color-celadon-50: #eafaee;
+  --color-celadon-100: #d6f5dd;
+  --color-celadon-200: #adebba;
+  --color-celadon-300: #84e198;
+  --color-celadon-400: #5bd776;
+  --color-celadon-500: #32cd53;
+  --color-celadon-600: #28a443;
+  --color-celadon-700: #1e7b32;
+  --color-celadon-800: #145221;
+  --color-celadon-900: #0a2911;
+  --color-celadon-950: #071d0c;
+
+  --color-muted-teal-50: #eff6f2;
+  --color-muted-teal-100: #dfece6;
+  --color-muted-teal-200: #bedacc;
+  --color-muted-teal-300: #9ec7b3;
+  --color-muted-teal-400: #7db59a;
+  --color-muted-teal-500: #5da281;
+  --color-muted-teal-600: #4a8267;
+  --color-muted-teal-700: #38614d;
+  --color-muted-teal-800: #254133;
+  --color-muted-teal-900: #13201a;
+  --color-muted-teal-950: #0d1712;
+
+  --color-beige-50: #f8f7ed;
+  --color-beige-100: #f1efda;
+  --color-beige-200: #e3deb5;
+  --color-beige-300: #d5ce90;
+  --color-beige-400: #c7be6b;
+  --color-beige-500: #b9ad46;
+  --color-beige-600: #948b38;
+  --color-beige-700: #6f682a;
+  --color-beige-800: #4a451c;
+  --color-beige-900: #25230e;
+  --color-beige-950: #1a180a;
+
+  --color-golden-pollen-50: #fff8e5;
+  --color-golden-pollen-100: #fff1cc;
+  --color-golden-pollen-200: #ffe299;
+  --color-golden-pollen-300: #ffd466;
+  --color-golden-pollen-400: #ffc533;
+  --color-golden-pollen-500: #ffb700;
+  --color-golden-pollen-600: #cc9200;
+  --color-golden-pollen-700: #996e00;
+  --color-golden-pollen-800: #664900;
+  --color-golden-pollen-900: #332500;
+  --color-golden-pollen-950: #241a00;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --background: #0a0a0a;
+    --foreground: #ededed;
+  }
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: Arial, Helvetica, sans-serif;
+}
