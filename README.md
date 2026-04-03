@@ -33,6 +33,13 @@ On macOS, if Node was installed through Homebrew, you may need to unlink it firs
 brew unlink node
 ```
 
+On Windows, use [nvm-windows](https://github.com/coreybutler/nvm-windows/releases) (added step — not in the original README). Download and run the installer, then in a new terminal:
+
+```
+nvm install 18
+nvm use 18
+```
+
 `config.js` contains all available options and its default values are defined in the `src/config.ts`
 
 1. Go to the server directory and install dependencies.
