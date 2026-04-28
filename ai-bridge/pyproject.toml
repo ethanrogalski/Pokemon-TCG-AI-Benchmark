@@ -1,0 +1,11 @@
+[project]
+name = "ai-bridge"
+version = "0.1.0"
+description = "Add your description here"
+requires-python = ">=3.11"
+dependencies = [
+    "anthropic>=0.97.0",
+    "python-socketio>=5.16.1",
+    "requests>=2.33.1",
+    "websocket-client>=1.9.0",
+]
