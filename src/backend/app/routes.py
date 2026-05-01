@@ -202,9 +202,11 @@ def record_match_result(
     # Mark tournament complete when the final (match 15) is decided
     if match.match_number == 15 and winner_p:
         tournament = db.query(Tournament).filter(Tournament.tournament_id == tournament_id).first()
-        tournament.status = "completed"
-        tournament.winner = winner_p.ai_model
-        tournament.completed_at = datetime.now(timezone.utc)
+        # Just for Python's type checker
+        if tournament:
+            tournament.status = "completed"
+            tournament.winner = winner_p.ai_model
+            tournament.completed_at = datetime.now(timezone.utc)
 
     db.commit()
     return {"ok": True}

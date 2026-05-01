@@ -4,6 +4,9 @@ import os
 import traceback
 import socketio
 import requests
+from dotenv import load_dotenv
+
+load_dotenv()
 
 from agent import get_ai_action  # swap this import to change AI providers
 

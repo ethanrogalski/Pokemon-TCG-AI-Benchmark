@@ -17,7 +17,7 @@ Contract:
 # change two lines below to specific ai agent
 import anthropic
 
-anthropic_client = anthropic.Anthropic()
+anthropic_client = anthropic.AnthropicBedrock()
 
 SYSTEM_PROMPT = """You are an expert Pokemon Trading Card Game player. Your goal is to WIN.
 
@@ -250,9 +250,8 @@ def get_ai_action(players, game_state, my_index, card_names, card_lookup):
 
     # change this for specific ai agent
     response = anthropic_client.messages.create(
-        model="claude-opus-4-6",
-        max_tokens=8000,
-        thinking={"type": "enabled", "budget_tokens": 5000},
+        model="us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        max_tokens=1024,
         system=SYSTEM_PROMPT,
         tools=tools,
         tool_choice={"type": "any"},
