@@ -10,6 +10,7 @@ Contract:
     action_name values:
         "play_card"  -> { hand_index: int, target_slot: "BOARD"|"ACTIVE"|"BENCH", bench_index?: int }
         "attack"     -> { attack_name: str }
+        "retreat"    -> { bench_index: int }
         "pass_turn"  -> {}
 """
 
@@ -150,7 +151,10 @@ def build_state_prompt(players, game_state, my_index, card_names, card_lookup):
     lines += ["", "OPPONENT'S BENCH:"]
     if opp_bench:
         for b in opp_bench:
-            lines.append(f"  {b['name']} | HP: {b['hp']} | Damage: {b['damage']}")
+            lines.append(
+                f"  {b['name']} | HP: {b['hp']} | Damage: {b['damage']} "
+                f"| Energy: {', '.join(b['energies']) if b['energies'] else 'none'}"
+            )
     else:
         lines.append("  (empty)")
 
@@ -211,6 +215,24 @@ def get_ai_action(players, game_state, my_index, card_names, card_lookup):
             },
         },
         {
+            "name": "retreat",
+            "description": (
+                "Retreat your active Pokemon to the bench, replacing it with a bench Pokemon. "
+                "Use when your active Pokemon is about to be knocked out and you have a better "
+                "attacker on the bench. Costs retreat energy."
+            ),
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "bench_index": {
+                        "type": "integer",
+                        "description": "0-based index of the bench Pokemon to switch in (0-4).",
+                    }
+                },
+                "required": ["bench_index"],
+            },
+        },
+        {
             "name": "pass_turn",
             "description": "End your turn without attacking. Use when you truly cannot attack.",
             "input_schema": {
@@ -230,7 +252,7 @@ def get_ai_action(players, game_state, my_index, card_names, card_lookup):
     response = anthropic_client.messages.create(
         model="claude-opus-4-6",
         max_tokens=8000,
-        thinking={"type": "adaptive"},
+        thinking={"type": "enabled", "budget_tokens": 5000},
         system=SYSTEM_PROMPT,
         tools=tools,
         tool_choice={"type": "any"},

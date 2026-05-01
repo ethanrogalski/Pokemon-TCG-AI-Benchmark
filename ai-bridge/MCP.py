@@ -1,14 +1,16 @@
 import base64
 import json
+import os
+import traceback
 import socketio
 import requests
 
 from agent import get_ai_action  # swap this import to change AI providers
 
-SERVER_URL = "http://localhost:8080"
-USERNAME = "monkey"
-PASSWORD = "monkey"
-GAME_ID = 1
+SERVER_URL = os.environ.get("SERVER_URL", "http://localhost:8080")
+USERNAME = os.environ.get("BOT_USERNAME", "monkey")
+PASSWORD = os.environ.get("BOT_PASSWORD", "monkey")
+GAME_ID = int(os.environ.get("GAME_ID", "1"))
 
 PLAYER_TURN_PHASE = 2
 PLAYER_TYPE_MAP = [1, 2]  # index -> PlayerType enum (TOP=1, BOTTOM=2)
@@ -51,72 +53,91 @@ except Exception as e:
 # ---------------------------------------------------------
 actions_this_turn = 0
 last_turn_number = -1
+turn_passed = False
 
 
 def on_state_change(data):
-    global actions_this_turn, last_turn_number
+    global actions_this_turn, last_turn_number, turn_passed
 
-    raw_state = base64.b64decode(data["stateData"]).decode("utf-8")
-    parsed = json.loads(raw_state)
-    players = parsed[0]
-    game_state = parsed[1]
+    try:
+        raw_state = base64.b64decode(data["stateData"]).decode("utf-8")
+        parsed = json.loads(raw_state)
+        players = parsed[0]
+        game_state = parsed[1]
 
-    phase = game_state.get("phase")
-    active_player = game_state.get("activePlayer")
-    turn = game_state.get("turn", 0)
+        phase = game_state.get("phase")
+        active_player = game_state.get("activePlayer")
+        turn = game_state.get("turn", 0)
 
-    my_index = next((i for i, p in enumerate(players) if p["name"] == USERNAME), None)
-    if my_index is None:
-        return
+        my_index = next((i for i, p in enumerate(players) if p["name"] == USERNAME), None)
+        if my_index is None:
+            return
 
-    if phase != PLAYER_TURN_PHASE or active_player != my_index:
-        return
+        if phase != PLAYER_TURN_PHASE or active_player != my_index:
+            return
 
-    if turn != last_turn_number:
-        actions_this_turn = 0
-        last_turn_number = turn
+        if turn != last_turn_number:
+            actions_this_turn = 0
+            turn_passed = False
+            last_turn_number = turn
 
-    if actions_this_turn >= MAX_ACTIONS_PER_TURN:
-        print("Action limit reached, passing turn.")
-        sio.emit("game:action:passTurn", {"gameId": GAME_ID})
-        return
+        if actions_this_turn >= MAX_ACTIONS_PER_TURN:
+            if not turn_passed:
+                print("Action limit reached, passing turn.")
+                turn_passed = True
+                sio.emit("game:action:passTurn", {"gameId": GAME_ID})
+            return
 
-    card_names = game_state.get("cardNames", [])
-    my_player_type = PLAYER_TYPE_MAP[my_index]
+        card_names = game_state.get("cardNames", [])
+        my_player_type = PLAYER_TYPE_MAP[my_index]
 
-    action_name, action_input = get_ai_action(players, game_state, my_index, card_names, card_lookup)
-    actions_this_turn += 1
+        action_name, action_input = get_ai_action(players, game_state, my_index, card_names, card_lookup)
+        actions_this_turn += 1
 
-    if action_name == "play_card":
-        hand_index = action_input.get("hand_index", 0)
-        slot = SLOT_MAP.get(action_input.get("target_slot", "BOARD"), 0)
-        bench_index = action_input.get("bench_index", 0)
-        sio.emit("game:action:playCard", {
-            "gameId": GAME_ID,
-            "handIndex": hand_index,
-            "target": {"player": my_player_type, "slot": slot, "index": bench_index},
-        })
+        if action_name == "play_card":
+            hand_index = action_input.get("hand_index", 0)
+            slot = SLOT_MAP.get(action_input.get("target_slot", "BOARD"), 0)
+            bench_index = action_input.get("bench_index", 0)
+            sio.emit("game:action:playCard", {
+                "gameId": GAME_ID,
+                "handIndex": hand_index,
+                "target": {"player": my_player_type, "slot": slot, "index": bench_index},
+            })
 
-    elif action_name == "attack":
-        sio.emit("game:action:attack", {"gameId": GAME_ID, "attack": action_input.get("attack_name", "")})
+        elif action_name == "attack":
+            sio.emit("game:action:attack", {"gameId": GAME_ID, "attack": action_input.get("attack_name", "")})
 
-    elif action_name == "pass_turn":
-        print(f"Passing: {action_input.get('reason', '')}")
-        sio.emit("game:action:passTurn", {"gameId": GAME_ID})
+        elif action_name == "retreat":
+            bench_index = action_input.get("bench_index", 0)
+            sio.emit("game:action:retreatStart", {"gameId": GAME_ID})
+            sio.emit("game:action:retreat", {"gameId": GAME_ID, "to": bench_index})
+
+        elif action_name == "pass_turn":
+            print(f"Passing: {action_input.get('reason', '')}")
+            sio.emit("game:action:passTurn", {"gameId": GAME_ID})
+
+    except Exception:
+        print("[on_state_change error]")
+        traceback.print_exc()
 
 
 # ---------------------------------------------------------
 # 4. Connect and run
 # ---------------------------------------------------------
 sio = socketio.Client()
+sio.on(f"game[{GAME_ID}]:stateChange", on_state_change)
 
 
 @sio.event
 def connect():
     print("Connected to Twinleaf server!")
-    sio.on(f"game[{GAME_ID}]:stateChange", on_state_change)
     sio.emit("game:rejoin", {"gameId": GAME_ID})
     print(f"Rejoined game {GAME_ID}.")
+
+
+@sio.event
+def disconnect():
+    print("Disconnected from server.")
 
 
 @sio.event
