@@ -29,6 +29,10 @@ CONDITION_NAMES = {
     0: "Paralyzed", 1: "Confused", 2: "Asleep", 3: "Poisoned", 4: "Burned",
 }
 
+STAGE_NAMES = {
+    2: "Basic", 3: "Stage1", 4: "Stage2",
+}
+
 def _energy_name(code) -> str:
     if isinstance(code, int):
         return CARD_TYPE_NAMES.get(code, str(code))
@@ -44,7 +48,8 @@ SYSTEM_PROMPT = """You are an expert Pokemon Trading Card Game player. Your goal
 RULES YOU MUST FOLLOW:
 - You can play multiple cards per turn but only ONE Supporter per turn
 - You can attach ONE energy per turn (to any Pokemon you control)
-- Basic Pokemon go to Bench (use target_slot=BENCH) or Active if empty (use ACTIVE)
+- Only BASIC Pokemon can be played directly from hand to Bench or Active
+- Stage 1 / Stage 2 / VMAX cards are EVOLUTIONS — they can only be played onto the correct Pokemon already on your bench, NOT directly from hand
 - Trainer/Supporter/Item/Stadium cards use target_slot=BOARD
 - Energy cards use target_slot=ACTIVE (for active) or BENCH with bench_index for bench Pokemon
 - Attacking ends your turn — only attack when ready
@@ -108,7 +113,16 @@ def build_state_prompt(players, game_state, my_index, card_names, card_lookup):
         info = card_lookup.get(name, {})
         super_type = info.get("superType", "")
         trainer_type = info.get("trainerType", "")
-        type_str = f"{super_type} {trainer_type}".strip() or "Unknown"
+        stage_int = info.get("stage")
+        stage_str = STAGE_NAMES.get(stage_int, "") if stage_int is not None else ""
+        evolves_from = info.get("evolvesFrom", "")
+        if stage_str and stage_str not in ("None", ""):
+            if evolves_from and stage_str != "Basic":
+                type_str = f"{stage_str} (evolves from {evolves_from})"
+            else:
+                type_str = stage_str
+        else:
+            type_str = f"{super_type} {trainer_type}".strip() or "Unknown"
         hand_lines.append(f"  [{i}] {name} ({type_str})")
 
     my_active = describe_pokemon_slot(me.get("active"), card_names, card_lookup)
@@ -209,7 +223,30 @@ def _ask_claude(state_summary, description, tool):
             return block.input
     return None
 
+def _ask_claude_action(state_summary, description, tools, max_tokens=1024):
+    resp = anthropic_client.messages.create(
+        model="us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        max_tokens=max_tokens,
+        system=SYSTEM_PROMPT,
+        tools=tools,
+        tool_choice={"type": "any"},
+        messages=[{"role": "user", "content": f"{state_summary}\n\n{description}"}],
+    )
+    for block in resp.content:
+        if block.type == "tool_use":
+            return block.name, block.input
+    return "pass_turn", {"reason": "No tool use returned"}
 
+# Swap these two functions to change AI provider
+def _ask_AI(state_summary, description, tool):
+    return _ask_claude(state_summary, description, tool)
+
+def _ask_AI_action(state_summary, description, tools, max_tokens=1024):
+    return _ask_claude_action(state_summary, description, tools, max_tokens)
+
+# Many prompt types
+# Show mulligan, show cards, select, selectOption, confirm cards, choose cards, choose pokemon
+# Should also add attach energy 
 def get_ai_prompt_response(prompt, players, game_state, my_index, card_names, card_lookup):
     ptype = prompt.get("type", "")
     message = prompt.get("message", "Make a choice.")
@@ -217,7 +254,7 @@ def get_ai_prompt_response(prompt, players, game_state, my_index, card_names, ca
     state_summary = build_state_prompt(players, game_state, my_index, card_names, card_lookup)
 
     if ptype == "Confirm":
-        result = _ask_claude(
+        result = _ask_AI(
             state_summary,
             f"You are being asked to confirm: {message}\nShould you say yes?",
             {
@@ -236,7 +273,7 @@ def get_ai_prompt_response(prompt, players, game_state, my_index, card_names, ca
         print(f"Prompt options: {opts}")
         values = prompt.get("values", [])
         options_str = "\n".join(f"  [{i}] {v}" for i, v in enumerate(values))
-        result = _ask_claude(
+        result = _ask_AI(
             state_summary,
             f"{message}\nOptions:\n{options_str}",
             {
@@ -281,7 +318,7 @@ def get_ai_prompt_response(prompt, players, game_state, my_index, card_names, ca
             return []  # min=0; nothing eligible, pick nothing
 
         cards_str = "\n".join(f"  [{j}] {name}" for j, (_, name) in enumerate(eligible))
-        result = _ask_claude(
+        result = _ask_AI(
             state_summary,
             f"{message}\nEligible cards:\n{cards_str}\nChoose {min_count} to {max_count}.",
             {
@@ -328,7 +365,7 @@ def get_ai_prompt_response(prompt, players, game_state, my_index, card_names, ca
         targets_str = "\n".join(f"  [{i}] {t['desc']}" for i, t in enumerate(targets))
         min_count = opts.get("min", 1)
         max_count = opts.get("max", 1)
-        result = _ask_claude(
+        result = _ask_AI(
             state_summary,
             f"{message}\nAvailable Pokemon:\n{targets_str}\nChoose {min_count}-{max_count}.",
             {
@@ -362,7 +399,7 @@ def get_ai_prompt_response(prompt, players, game_state, my_index, card_names, ca
         )
         min_count = opts.get("min", 1)
         max_count = opts.get("max", 1)
-        result = _ask_claude(
+        result = _ask_AI(
             state_summary,
             f"{message}\nAvailable energy:\n{energy_str}\nChoose {min_count}-{max_count}.",
             {
@@ -394,7 +431,7 @@ def get_ai_prompt_response(prompt, players, game_state, my_index, card_names, ca
             for atk in info.get("attacks", []):
                 attack_options.append({"card_index": ci, "attack": atk["name"], "desc": f"{name} — {atk['name']}"})
         atk_str = "\n".join(f"  [{i}] {a['desc']}" for i, a in enumerate(attack_options))
-        result = _ask_claude(
+        result = _ask_AI(
             state_summary,
             f"{message}\nAvailable attacks:\n{atk_str}",
             {
@@ -412,6 +449,18 @@ def get_ai_prompt_response(prompt, players, game_state, my_index, card_names, ca
             chosen = attack_options[idx]
             return {"index": chosen["card_index"], "attack": chosen["attack"]}
         return None
+
+    elif ptype == "Select":
+        return 0  # first option = draw max cards (options sorted high→low)
+
+    elif ptype == "Shuffle prizes":
+        prizes = players[my_index].get("prizes", [])
+        return list(range(len(prizes)))
+
+    elif ptype == "Attach energy":
+        active = players[my_index].get("active", {})
+        slot = 1 if active.get("cards") else 2
+        return [{"to": {"player": MY_PLAYER_TYPE, "slot": slot, "index": 0}, "index": 0}]
 
     print(f"[prompt] Unknown type '{ptype}', returning None")
     return None
@@ -504,40 +553,25 @@ def get_ai_action(players, game_state, my_index, card_names, card_lookup, action
         },
     ]
 
-    # change this for specific ai agent
-    response = anthropic_client.messages.create(
-        model="us.anthropic.claude-haiku-4-5-20251001-v1:0",
-        max_tokens=1024,
-        system=SYSTEM_PROMPT,
-        tools=tools,
-        tool_choice={"type": "any"},
-        messages=[
-            {
-                "role": "user",
-                "content": (
-                    f"{state_prompt}\n\n"
-                    + (f"LAST ACTION REJECTED: {last_rejection}\nChoose a different action.\n\n" if last_rejection else "")
-                    + f"Actions taken this turn so far: {actions_taken}.\n"
-                    + (
-                        "You have played enough cards. ATTACK NOW if you have sufficient energy, "
-                        "or PASS if you cannot attack. Do not play more cards.\n"
-                        if actions_taken >= 5
-                        else (
-                            "Consider whether attacking or passing is now better than playing another card.\n"
-                            if actions_taken >= 3
-                            else ""
-                        )
-                    )
-                    + "Choose your next action. You can play cards one at a time — "
-                    "pick the single best action to take right now."
-                ),
-            }
-        ],
+    action_name, action_input = _ask_AI_action(
+        state_prompt,
+        (
+            (f"LAST ACTION REJECTED: {last_rejection}\nChoose a different action.\n\n" if last_rejection else "")
+            + f"Actions taken this turn so far: {actions_taken}.\n"
+            + (
+                "You have played enough cards. ATTACK NOW if you have sufficient energy, "
+                "or PASS if you cannot attack. Do not play more cards.\n"
+                if actions_taken >= 5
+                else (
+                    "Consider whether attacking or passing is now better than playing another card.\n"
+                    if actions_taken >= 3
+                    else ""
+                )
+            )
+            + "Choose your next action. You can play cards one at a time — "
+            "pick the single best action to take right now."
+        ),
+        tools,
     )
-
-    for block in response.content:
-        if block.type == "tool_use":
-            print(f"AI chose: {block.name} {block.input}")
-            return block.name, block.input
-
-    return "pass_turn", {"reason": "No tool use returned"}
+    print(f"AI chose: {action_name} {action_input}")
+    return action_name, action_input
