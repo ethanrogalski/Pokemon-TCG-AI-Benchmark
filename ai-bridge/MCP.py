@@ -17,7 +17,11 @@ PASSWORD = os.environ.get("BOT_PASSWORD", "monkey")
 GAME_ID = int(os.environ.get("GAME_ID", "1"))
 
 PLAYER_TURN_PHASE = 2
-PLAYER_TYPE_MAP = [1, 2]  # index -> PlayerType enum (TOP=1, BOTTOM=2)
+# CardTarget.player is relative to the acting player:
+#   BOTTOM_PLAYER (2) = the acting player's own Pokemon
+#   TOP_PLAYER    (1) = the opponent's Pokemon
+MY_PLAYER_TYPE = 2   # PlayerType.BOTTOM_PLAYER
+OPP_PLAYER_TYPE = 1  # PlayerType.TOP_PLAYER
 SLOT_MAP = {"BOARD": 0, "ACTIVE": 1, "BENCH": 2}
 MAX_ACTIONS_PER_TURN = 15
 
@@ -60,6 +64,8 @@ last_turn_number = -1
 turn_passed = False
 attack_committed = False
 last_sent_prompt_id = None
+last_rejection = None
+_current_context = None  # (players, game_state, my_index, card_names) — cached for rejection callbacks
 
 
 def resolve_prompt(prompt, players, game_state, my_index, card_names, card_lookup):
@@ -79,16 +85,117 @@ def resolve_prompt(prompt, players, game_state, my_index, card_names, card_looku
         return list(range(len(deck_cards)))
 
     if ptype == "Attach energy":
-        my_player_type = PLAYER_TYPE_MAP[my_index]
         active = players[my_index].get("active", {})
         slot = 1 if active.get("cards") else 2  # ACTIVE=1, BENCH=2
-        return [{"to": {"player": my_player_type, "slot": slot, "index": 0}, "index": 0}]
+        return [{"to": {"player": MY_PLAYER_TYPE, "slot": slot, "index": 0}, "index": 0}]
 
     return get_ai_prompt_response(prompt, players, game_state, my_index, card_names, card_lookup)
 
 
+def _is_rejection(ack_data):
+    if ack_data is None or ack_data is True:
+        return False
+    if isinstance(ack_data, dict) and ack_data.get("message") == "ok":
+        return False
+    return True
+
+
+def _take_action(players, game_state, my_index, card_names):
+    global actions_this_turn, turn_passed, attack_committed, last_rejection
+
+    if attack_committed or turn_passed:
+        return
+
+    if actions_this_turn >= MAX_ACTIONS_PER_TURN:
+        if not turn_passed:
+            print("Action limit reached, passing turn.")
+            turn_passed = True
+            sio.emit("game:action:passTurn", {"gameId": GAME_ID})
+        return
+
+    action_name, action_input = get_ai_action(
+        players, game_state, my_index, card_names, card_lookup, actions_this_turn,
+        last_rejection=last_rejection,
+    )
+    last_rejection = None
+    actions_this_turn += 1
+
+    if action_name == "play_card":
+        hand_index = action_input.get("hand_index", 0)
+        slot = SLOT_MAP.get(action_input.get("target_slot", "BOARD"), 0)
+        bench_index = action_input.get("bench_index", 0)
+
+        def on_play_ack(ack_data=None, *_):
+            global last_rejection
+            if _is_rejection(ack_data):
+                reason = f"play_card(hand={hand_index}, slot={action_input.get('target_slot')}) rejected by server: {ack_data}"
+                print(f"[action] REJECTED {reason}")
+                last_rejection = reason
+                _take_action(players, game_state, my_index, card_names)
+            else:
+                print(f"[action] play_card hand={hand_index} accepted")
+
+        sio.emit("game:action:playCard", {
+            "gameId": GAME_ID,
+            "handIndex": hand_index,
+            "target": {"player": MY_PLAYER_TYPE, "slot": slot, "index": bench_index},
+        }, callback=on_play_ack)
+
+    elif action_name == "attack":
+        attack_name = action_input.get("attack_name", "")
+        attack_committed = True
+
+        def on_attack_ack(ack_data=None, *_):
+            global attack_committed, last_rejection
+            if _is_rejection(ack_data):
+                reason = f"attack({attack_name!r}) rejected by server: {ack_data}"
+                print(f"[action] REJECTED {reason}")
+                attack_committed = False
+                last_rejection = reason
+                _take_action(players, game_state, my_index, card_names)
+            else:
+                print(f"[action] attack {attack_name!r} accepted")
+
+        sio.emit("game:action:attack", {"gameId": GAME_ID, "attack": attack_name}, callback=on_attack_ack)
+
+    elif action_name == "retreat":
+        bench_index = action_input.get("bench_index", 0)
+        attack_committed = True
+
+        def on_retreat_ack(ack_data=None, *_):
+            global attack_committed, last_rejection
+            if _is_rejection(ack_data):
+                reason = f"retreat(bench={bench_index}) rejected by server: {ack_data}"
+                print(f"[action] REJECTED {reason}")
+                attack_committed = False
+                last_rejection = reason
+                _take_action(players, game_state, my_index, card_names)
+            else:
+                print(f"[action] retreat to bench={bench_index} accepted")
+
+        sio.emit("game:action:retreatStart", {"gameId": GAME_ID})
+        sio.emit("game:action:retreat", {"gameId": GAME_ID, "to": bench_index}, callback=on_retreat_ack)
+
+    elif action_name == "pass_turn":
+        turn_passed = True
+        print(f"Passing: {action_input.get('reason', '')}")
+
+        def on_pass_ack(ack_data=None, *_):
+            global turn_passed, last_rejection
+            if _is_rejection(ack_data):
+                reason = f"pass_turn rejected by server: {ack_data}"
+                print(f"[action] REJECTED {reason}")
+                turn_passed = False
+                last_rejection = reason
+                _take_action(players, game_state, my_index, card_names)
+            else:
+                print("[action] pass_turn accepted")
+
+        sio.emit("game:action:passTurn", {"gameId": GAME_ID}, callback=on_pass_ack)
+
+
 def on_state_change(data):
-    global actions_this_turn, last_turn_number, turn_passed, attack_committed, last_sent_prompt_id
+    global actions_this_turn, last_turn_number, turn_passed, attack_committed, last_sent_prompt_id, last_rejection, _current_context
 
     try:
         raw_state = base64.b64decode(data["stateData"]).decode("utf-8")
@@ -109,6 +216,7 @@ def on_state_change(data):
 
         card_names = game_state.get("cardNames", [])
         my_player_id = players[my_index].get("id")
+        _current_context = (players, game_state, my_index, card_names)
 
         # Resolve any pending prompt first (can arrive in any phase)
         prompts = game_state.get("prompts", [])
@@ -135,13 +243,13 @@ def on_state_change(data):
             result = resolve_prompt(my_prompt, players, game_state, my_index, card_names, card_lookup)
             print(f"[prompt] sending result: {result!r}")
 
-            def on_resolve_ack(data=None, *_):
-                if isinstance(data, dict) and data.get("message") == "ok":
-                    print(f"[prompt] SERVER ACCEPTED resolvePrompt id={prompt_id}")
-                elif data is None or data is True:
-                    print(f"[prompt] SERVER ACCEPTED resolvePrompt id={prompt_id}")
+            def on_resolve_ack(ack_data=None, *_):
+                global last_sent_prompt_id
+                if _is_rejection(ack_data):
+                    print(f"[prompt] SERVER REJECTED resolvePrompt id={prompt_id}: {ack_data}")
+                    last_sent_prompt_id = None  # allow retry on next stateChange
                 else:
-                    print(f"[prompt] SERVER REJECTED resolvePrompt id={prompt_id}: {data}")
+                    print(f"[prompt] SERVER ACCEPTED resolvePrompt id={prompt_id}")
 
             sio.emit("game:action:resolvePrompt", {"gameId": GAME_ID, "id": prompt_id, "result": result},
                      callback=on_resolve_ack)
@@ -160,47 +268,10 @@ def on_state_change(data):
             actions_this_turn = 0
             turn_passed = False
             attack_committed = False
+            last_rejection = None
             last_turn_number = turn
 
-        if attack_committed or turn_passed:
-            return
-
-        if actions_this_turn >= MAX_ACTIONS_PER_TURN:
-            if not turn_passed:
-                print("Action limit reached, passing turn.")
-                turn_passed = True
-                sio.emit("game:action:passTurn", {"gameId": GAME_ID})
-            return
-
-        my_player_type = PLAYER_TYPE_MAP[my_index]
-
-        action_name, action_input = get_ai_action(players, game_state, my_index, card_names, card_lookup, actions_this_turn)
-        actions_this_turn += 1
-
-        if action_name == "play_card":
-            hand_index = action_input.get("hand_index", 0)
-            slot = SLOT_MAP.get(action_input.get("target_slot", "BOARD"), 0)
-            bench_index = action_input.get("bench_index", 0)
-            sio.emit("game:action:playCard", {
-                "gameId": GAME_ID,
-                "handIndex": hand_index,
-                "target": {"player": my_player_type, "slot": slot, "index": bench_index},
-            })
-
-        elif action_name == "attack":
-            attack_committed = True
-            sio.emit("game:action:attack", {"gameId": GAME_ID, "attack": action_input.get("attack_name", "")})
-
-        elif action_name == "retreat":
-            attack_committed = True  # retreat also ends the turn
-            bench_index = action_input.get("bench_index", 0)
-            sio.emit("game:action:retreatStart", {"gameId": GAME_ID})
-            sio.emit("game:action:retreat", {"gameId": GAME_ID, "to": bench_index})
-
-        elif action_name == "pass_turn":
-            turn_passed = True
-            print(f"Passing: {action_input.get('reason', '')}")
-            sio.emit("game:action:passTurn", {"gameId": GAME_ID})
+        _take_action(players, game_state, my_index, card_names)
 
     except Exception:
         print("[on_state_change error]")

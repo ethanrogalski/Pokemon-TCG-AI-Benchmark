@@ -189,7 +189,10 @@ def build_state_prompt(players, game_state, my_index, card_names, card_lookup):
     return "\n".join(lines)
 
 
-PLAYER_TYPE_MAP = [1, 2]  # index -> PlayerType enum (TOP=1, BOTTOM=2)
+# CardTarget.player is relative to the acting player:
+#   BOTTOM_PLAYER (2) = own Pokemon, TOP_PLAYER (1) = opponent's Pokemon
+MY_PLAYER_TYPE = 2
+OPP_PLAYER_TYPE = 1
 
 
 def _ask_claude(state_summary, description, tool):
@@ -305,8 +308,8 @@ def get_ai_prompt_response(prompt, players, game_state, my_index, card_names, ca
         print(f"Prompt pokemon options: {opts}")
         me = players[my_index]
         opp = players[1 - my_index]
-        my_type = PLAYER_TYPE_MAP[my_index]
-        opp_type = PLAYER_TYPE_MAP[1 - my_index]
+        my_type = MY_PLAYER_TYPE
+        opp_type = OPP_PLAYER_TYPE
         targets = []
         if me.get("active", {}).get("cards"):
             name = get_card_name(me["active"]["cards"][0], card_names)
@@ -414,7 +417,7 @@ def get_ai_prompt_response(prompt, players, game_state, my_index, card_names, ca
     return None
 
 
-def get_ai_action(players, game_state, my_index, card_names, card_lookup, actions_taken=0):
+def get_ai_action(players, game_state, my_index, card_names, card_lookup, actions_taken=0, last_rejection=None):
     state_prompt = build_state_prompt(
         players, game_state, my_index, card_names, card_lookup
     )
@@ -513,7 +516,8 @@ def get_ai_action(players, game_state, my_index, card_names, card_lookup, action
                 "role": "user",
                 "content": (
                     f"{state_prompt}\n\n"
-                    f"Actions taken this turn so far: {actions_taken}.\n"
+                    + (f"LAST ACTION REJECTED: {last_rejection}\nChoose a different action.\n\n" if last_rejection else "")
+                    + f"Actions taken this turn so far: {actions_taken}.\n"
                     + (
                         "You have played enough cards. ATTACK NOW if you have sufficient energy, "
                         "or PASS if you cannot attack. Do not play more cards.\n"
