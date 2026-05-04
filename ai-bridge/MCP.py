@@ -67,11 +67,16 @@ last_sent_prompt_id = None
 last_rejection = None
 _current_context = None  # (players, game_state, my_index, card_names) — cached for rejection callbacks
 
-
+# Prompts resolved auto
+# - "Alert", "Coin flip", "WaitPrompt" = just acknowledge
+# - "Choose prize" = pick the first non-empty prize(s)
+# - "Shuffle deck" = shuffle all cards in deck
+# - "Attach energy" = attach the first energy in hand to active if empty, otherwise - should prolly not be auto
+# - Everything else sent to AI
 def resolve_prompt(prompt, players, game_state, my_index, card_names, card_lookup):
     ptype = prompt.get("type", "")
 
-    if ptype in ("Alert", "Coin flip", "WaitPrompt"):
+    if ptype in ("Alert", "Coin flip", "WaitPrompt", "Show mulligan", "Show cards", "Confirm cards"):
         return True
 
     if ptype == "Choose prize":
@@ -83,11 +88,6 @@ def resolve_prompt(prompt, players, game_state, my_index, card_names, card_looku
     if ptype == "Shuffle deck":
         deck_cards = players[my_index].get("deck", {}).get("cards", [])
         return list(range(len(deck_cards)))
-
-    if ptype == "Attach energy":
-        active = players[my_index].get("active", {})
-        slot = 1 if active.get("cards") else 2  # ACTIVE=1, BENCH=2
-        return [{"to": {"player": MY_PLAYER_TYPE, "slot": slot, "index": 0}, "index": 0}]
 
     return get_ai_prompt_response(prompt, players, game_state, my_index, card_names, card_lookup)
 
