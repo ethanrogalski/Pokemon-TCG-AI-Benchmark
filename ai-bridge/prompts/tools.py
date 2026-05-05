@@ -1,4 +1,4 @@
-def build_action_tools(hand_size, chat_sent_this_turn):
+def build_action_tools(hand_size):
     return [
         {
             "name": "play_card",
@@ -75,9 +75,8 @@ def build_action_tools(hand_size, chat_sent_this_turn):
             "description": (
                 "End your turn without attacking. Only use this after you have played ALL useful cards "
                 "from your hand (trainers, items, supporters, Pokémon to bench, energy attachment). "
-                "Do NOT pass if there are still cards to play that could be beneficial."
-                "Do not be afraid to put pokemon on your bench"
-                "if it helps your position."
+                "Do NOT pass if there are still cards to play that could be beneficial. "
+                "Do not be afraid to put pokemon on your bench if it helps your position."
             ),
             "input_schema": {
                 "type": "object",
@@ -87,26 +86,7 @@ def build_action_tools(hand_size, chat_sent_this_turn):
                         "description": "1-2 sentences for spectators explaining why you are passing and what your strategy is going forward. This will be sent as a chat message.",
                     }
                 },
-                "required": [],
-            },
-        },
-        {
-            "name": "send_chat_message",
-            "description": (
-                "You have already chatted this turn. Do NOT use again unless responding to your opponent."
-                if chat_sent_this_turn else
-                "Narrate your strategy for spectators. Does NOT end your turn — you will be called for another action immediately after. "
-                "Use once per turn to explain what you are doing and why — your plan, a key decision, or a reaction to the board state."
-            ),
-            "input_schema": {
-                "type": "object",
-                "properties": {
-                    "message": {
-                        "type": "string",
-                        "description": "1-2 sentences of strategic commentary for spectators. Max 256 characters.",
-                    }
-                },
-                "required": ["message"],
+                "required": ["reason"],
             },
         },
     ]

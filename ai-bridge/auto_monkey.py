@@ -20,6 +20,7 @@ import json
 import os
 import sys
 import traceback
+import threading
 import socketio
 import requests
 from dotenv import load_dotenv
@@ -110,13 +111,13 @@ last_rejected_prompt_id = None
 _current_context = None
 _waiting_for_prompt_ack = False  # True after sending resolvePrompt, until ack fires
 prompt_fail_count = 0            # consecutive rejections of the current prompt
-_server_busy = False             # True when server returned ACTION_IN_PROGRESS; cleared on next stateChange
+_state_lock = threading.Lock()   # only one stateChange processed at a time
 
 
 def _reset_game_state():
     global actions_this_turn, last_turn_number, turn_passed, attack_committed
     global chat_sent_this_turn, supporter_played_this_turn, energy_attached_this_turn, last_sent_prompt_id, last_rejection
-    global last_prompt_rejection, last_rejected_prompt_id, _current_context, _waiting_for_prompt_ack, prompt_fail_count, _server_busy
+    global last_prompt_rejection, last_rejected_prompt_id, _current_context, _waiting_for_prompt_ack, prompt_fail_count
     actions_this_turn = 0
     last_turn_number = -1
     turn_passed = False
@@ -131,7 +132,6 @@ def _reset_game_state():
     _current_context = None
     _waiting_for_prompt_ack = False
     prompt_fail_count = 0
-    _server_busy = False
 
 
 # ---------------------------------------------------------
@@ -168,34 +168,47 @@ def _is_rejection(ack_data):
     return True
 
 
+def _emit_sync(event_name, data, timeout=10):
+    """Emit a socket.io event and block until the server ack arrives."""
+    result = [None]
+    done = threading.Event()
+
+    def ack(ack_data=None, *_):
+        result[0] = ack_data
+        done.set()
+
+    sio.emit(event_name, data, callback=ack)
+    done.wait(timeout=timeout)
+    return result[0]
+
+
 # ---------------------------------------------------------
 # 6. Action dispatcher
 # ---------------------------------------------------------
 def _take_action(players, game_state, my_index, card_names):
-    global actions_this_turn, turn_passed, attack_committed, chat_sent_this_turn, supporter_played_this_turn, energy_attached_this_turn, last_rejection
+    """Emit one action, wait for ack, return 'done' / 'wait' / 'retry'."""
+    global actions_this_turn, turn_passed, attack_committed, chat_sent_this_turn
+    global supporter_played_this_turn, energy_attached_this_turn, last_rejection
 
     if attack_committed or turn_passed:
-        return
+        return "done"
 
-    if _waiting_for_prompt_ack or _server_busy:
-        return
+    if _waiting_for_prompt_ack:
+        return "wait"
 
     if actions_this_turn >= MAX_ACTIONS_PER_TURN:
-        if not turn_passed:
-            print("Action limit reached, passing turn.")
-            turn_passed = True
-            sio.emit("game:action:passTurn", {"gameId": GAME_ID})
-        return
+        print("Action limit reached, passing turn.")
+        turn_passed = True
+        sio.emit("game:action:passTurn", {"gameId": GAME_ID})
+        return "done"
 
     action_name, action_input = get_ai_action(
         players, game_state, my_index, card_names, card_lookup, actions_this_turn,
         last_rejection=last_rejection,
-        chat_sent_this_turn=chat_sent_this_turn,
         supporter_played_this_turn=supporter_played_this_turn,
         energy_attached_this_turn=energy_attached_this_turn,
     )
     last_rejection = None
-    actions_this_turn += 1
 
     if action_name == "play_card":
         hand_index = action_input.get("hand_index", 0)
@@ -207,83 +220,71 @@ def _take_action(players, game_state, my_index, card_names):
         _is_supporter = card_lookup.get(_card_name, {}).get("trainerType") == 1
         _is_energy = card_lookup.get(_card_name, {}).get("superType") == 3
 
-        def on_play_ack(ack_data=None, *_):
-            global last_rejection, supporter_played_this_turn, energy_attached_this_turn, _server_busy
-            if _is_rejection(ack_data):
-                reason = f"play_card(hand={hand_index}, slot={action_input.get('target_slot')}) rejected: {ack_data}"
-                print(f"[action] REJECTED {reason}")
-                if isinstance(ack_data, dict) and ack_data.get("data") in ("ACTION_IN_PROGRESS", "NOT_YOUR_TURN"):
-                    _server_busy = True
-                    return
-                last_rejection = reason
-                _take_action(players, game_state, my_index, card_names)
-            else:
-                if _is_supporter:
-                    supporter_played_this_turn = True
-                if _is_energy:
-                    energy_attached_this_turn = True
-                print(f"[action] play_card hand={hand_index} accepted")
-
-        sio.emit("game:action:playCard", {
+        ack_data = _emit_sync("game:action:playCard", {
             "gameId": GAME_ID,
             "handIndex": hand_index,
             "target": {"player": MY_PLAYER_TYPE, "slot": slot, "index": bench_index},
-        }, callback=on_play_ack)
+        })
+
+        if _is_rejection(ack_data):
+            reason = f"play_card(hand={hand_index}, slot={action_input.get('target_slot')}) rejected: {ack_data}"
+            print(f"[action] REJECTED {reason}")
+            if isinstance(ack_data, dict) and ack_data.get("data") in ("ACTION_IN_PROGRESS", "NOT_YOUR_TURN"):
+                return "wait"
+            last_rejection = reason
+            return "retry"
+
+        actions_this_turn += 1
+        if _is_supporter:
+            supporter_played_this_turn = True
+        if _is_energy:
+            energy_attached_this_turn = True
+        print(f"[action] play_card hand={hand_index} accepted")
+        return "wait"  # wait for next stateChange with updated board state
 
     elif action_name == "attack":
         attack_name = action_input.get("attack_name", "")
-        attack_committed = True
-
         chat_msg = action_input.get("message", "")[:256]
         if not chat_sent_this_turn and chat_msg:
             print(f"[chat] Attack chat: {chat_msg!r}")
             sio.emit("game:action:appendLog", {"gameId": GAME_ID, "message": chat_msg})
             chat_sent_this_turn = True
 
-        def on_attack_ack(ack_data=None, *_):
-            global attack_committed, last_rejection, _server_busy
-            if _is_rejection(ack_data):
-                reason = f"attack({attack_name!r}) rejected: {ack_data}"
-                print(f"[action] REJECTED {reason}")
-                attack_committed = False
-                if isinstance(ack_data, dict) and ack_data.get("data") in ("ACTION_IN_PROGRESS", "NOT_YOUR_TURN"):
-                    _server_busy = True
-                    return
-                last_rejection = reason
-                _take_action(players, game_state, my_index, card_names)
-            else:
-                print(f"[action] attack {attack_name!r} accepted")
+        attack_committed = True
+        ack_data = _emit_sync("game:action:attack", {"gameId": GAME_ID, "attack": attack_name})
 
-        sio.emit("game:action:attack", {"gameId": GAME_ID, "attack": attack_name}, callback=on_attack_ack)
+        if _is_rejection(ack_data):
+            reason = f"attack({attack_name!r}) rejected: {ack_data}"
+            print(f"[action] REJECTED {reason}")
+            attack_committed = False
+            if isinstance(ack_data, dict) and ack_data.get("data") in ("ACTION_IN_PROGRESS", "NOT_YOUR_TURN"):
+                return "wait"
+            last_rejection = reason
+            return "retry"
+
+        actions_this_turn += 1
+        print(f"[action] attack {attack_name!r} accepted")
+        return "done"
 
     elif action_name == "retreat":
         bench_index = action_input.get("bench_index", 0)
         attack_committed = True
-
-        def on_retreat_ack(ack_data=None, *_):
-            global attack_committed, last_rejection, _server_busy
-            if _is_rejection(ack_data):
-                reason = f"retreat(bench={bench_index}) rejected: {ack_data}"
-                print(f"[action] REJECTED {reason}")
-                attack_committed = False
-                if isinstance(ack_data, dict) and ack_data.get("data") in ("ACTION_IN_PROGRESS", "NOT_YOUR_TURN"):
-                    _server_busy = True
-                    return
-                last_rejection = reason
-                _take_action(players, game_state, my_index, card_names)
-            else:
-                print(f"[action] retreat to bench={bench_index} accepted")
-                attack_committed = False
-
         sio.emit("game:action:retreatStart", {"gameId": GAME_ID})
-        sio.emit("game:action:retreat", {"gameId": GAME_ID, "to": bench_index}, callback=on_retreat_ack)
+        ack_data = _emit_sync("game:action:retreat", {"gameId": GAME_ID, "to": bench_index})
 
-    elif action_name == "send_chat_message":
-        msg = action_input.get("message", "")[:256]
-        print(f"[chat] Sending: {msg!r}")
-        sio.emit("game:action:appendLog", {"gameId": GAME_ID, "message": msg})
-        chat_sent_this_turn = True
-        _take_action(players, game_state, my_index, card_names)
+        if _is_rejection(ack_data):
+            reason = f"retreat(bench={bench_index}) rejected: {ack_data}"
+            print(f"[action] REJECTED {reason}")
+            attack_committed = False
+            if isinstance(ack_data, dict) and ack_data.get("data") in ("ACTION_IN_PROGRESS", "NOT_YOUR_TURN"):
+                return "wait"
+            last_rejection = reason
+            return "retry"
+
+        actions_this_turn += 1
+        attack_committed = False  # retreat doesn't end the turn; can still attack
+        print(f"[action] retreat to bench={bench_index} accepted")
+        return "wait"  # wait for next stateChange with updated board state
 
     elif action_name == "pass_turn":
         turn_passed = True
@@ -293,29 +294,35 @@ def _take_action(players, game_state, my_index, card_names):
             sio.emit("game:action:appendLog", {"gameId": GAME_ID, "message": reason_text[:256]})
             chat_sent_this_turn = True
 
-        def on_pass_ack(ack_data=None, *_):
-            global turn_passed, last_rejection, _server_busy
-            if _is_rejection(ack_data):
-                reason = f"pass_turn rejected: {ack_data}"
-                print(f"[action] REJECTED {reason}")
-                turn_passed = False
-                if isinstance(ack_data, dict) and ack_data.get("data") in ("ACTION_IN_PROGRESS", "NOT_YOUR_TURN"):
-                    _server_busy = True
-                    return
-                last_rejection = reason
-                _take_action(players, game_state, my_index, card_names)
-            else:
-                print("[action] pass_turn accepted")
+        ack_data = _emit_sync("game:action:passTurn", {"gameId": GAME_ID})
 
-        sio.emit("game:action:passTurn", {"gameId": GAME_ID}, callback=on_pass_ack)
+        if _is_rejection(ack_data):
+            reason = f"pass_turn rejected: {ack_data}"
+            print(f"[action] REJECTED {reason}")
+            turn_passed = False
+            if isinstance(ack_data, dict) and ack_data.get("data") in ("ACTION_IN_PROGRESS", "NOT_YOUR_TURN"):
+                return "wait"
+            last_rejection = reason
+            return "retry"
+
+        actions_this_turn += 1
+        print("[action] pass_turn accepted")
+        return "done"
+
+    else:
+        print(f"[action] Unknown action: {action_name!r}")
+        return "wait"
 
 
 # ---------------------------------------------------------
 # 7. State change handler
 # ---------------------------------------------------------
 def on_state_change(data):
+    if not _state_lock.acquire(blocking=False):
+        return  # another thread is already processing a stateChange — drop this one
+
     global actions_this_turn, last_turn_number, turn_passed, attack_committed
-    global chat_sent_this_turn, supporter_played_this_turn, energy_attached_this_turn, last_sent_prompt_id, last_rejection, last_prompt_rejection, last_rejected_prompt_id, _current_context, _waiting_for_prompt_ack, prompt_fail_count, _server_busy
+    global chat_sent_this_turn, supporter_played_this_turn, energy_attached_this_turn, last_sent_prompt_id, last_rejection, last_prompt_rejection, last_rejected_prompt_id, _current_context, _waiting_for_prompt_ack, prompt_fail_count
 
     try:
         raw_state = base64.b64decode(data["stateData"]).decode("utf-8")
@@ -365,7 +372,6 @@ def on_state_change(data):
                          for i, c in enumerate(cards_data)]
                 print(f"[prompt] named cards: {named[:30]}")
 
-            _waiting_for_prompt_ack = True
             result = resolve_prompt(my_prompt, players, game_state, my_index, card_names, card_lookup, last_prompt_rejection, prompt_fail_count=prompt_fail_count)
             print(f"[prompt] sending result: {result!r}")
 
@@ -410,18 +416,22 @@ def on_state_change(data):
             last_rejection = None
             _waiting_for_prompt_ack = False
             prompt_fail_count = 0
-            _server_busy = False
             last_turn_number = turn
 
         if _waiting_for_prompt_ack:
             return
 
-        _server_busy = False
-        _take_action(players, game_state, my_index, card_names)
+        # Loop only on rejections — everything else waits for the next stateChange
+        while not attack_committed and not turn_passed:
+            result = _take_action(players, game_state, my_index, card_names)
+            if result != "retry":
+                break
 
     except Exception:
         print("[on_state_change error]")
         traceback.print_exc()
+    finally:
+        _state_lock.release()
 
 
 # ---------------------------------------------------------
@@ -468,4 +478,3 @@ sio.connect(
 )
 
 sio.wait()
-
