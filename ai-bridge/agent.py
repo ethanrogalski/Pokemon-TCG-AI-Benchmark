@@ -162,7 +162,14 @@ def compute_tactical_summary(players, my_index, card_names, card_lookup) -> str:
 def describe_pokemon_slot(poke_list, card_names, card_lookup):
     if not poke_list or not poke_list.get("cards"):
         return None
-    name = get_card_name(poke_list["cards"][0], card_names)
+    # Iterate from the end to find the top Pokémon card (skipping attached tools)
+    active_id = poke_list["cards"][-1]
+    for card_id in reversed(poke_list["cards"]):
+        info = card_lookup.get(get_card_name(card_id, card_names), {})
+        if info.get("superType") == 1:  # SuperType.POKEMON
+            active_id = card_id
+            break
+    name = get_card_name(active_id, card_names)
     damage = poke_list.get("damage", 0)
     card_info = card_lookup.get(name, {})
     hp = card_info.get("hp", "?")
@@ -215,7 +222,9 @@ def build_state_prompt(players, game_state, my_index, card_names, card_lookup, s
                 type_str = stage_str
         else:
             type_str = f"{super_type} {trainer_type}".strip() or "Unknown"
-        hand_lines.append(f"  [{i}] {name} ({type_str})")
+        card_text = info.get("text", "").replace("\n", " ").strip()
+        text_suffix = f" — {card_text}" if card_text and super_type != 1 else ""  # skip text for Pokemon (shown via attacks/abilities)
+        hand_lines.append(f"  [{i}] {name} ({type_str}){text_suffix}")
 
     my_active = describe_pokemon_slot(me.get("active"), card_names, card_lookup)
     my_bench = [
@@ -835,7 +844,11 @@ def get_ai_prompt_response(prompt, players, game_state, my_index, card_names, ca
     return None
 
 
+<<<<<<< HEAD
 def get_ai_action(players, game_state, my_index, card_names, card_lookup, actions_taken=0, last_rejection=None, chat_sent_this_turn=False, supporter_played_this_turn=False, energy_attached_this_turn=False, turn_plan_text=None):
+=======
+def get_ai_action(players, game_state, my_index, card_names, card_lookup, actions_taken=0, last_rejection=None, supporter_played_this_turn=False, energy_attached_this_turn=False):
+>>>>>>> origin/main
     state_prompt = build_state_prompt(
         players, game_state, my_index, card_names, card_lookup,
         supporter_played_this_turn=supporter_played_this_turn,
@@ -844,7 +857,7 @@ def get_ai_action(players, game_state, my_index, card_names, card_lookup, action
     print(f"\n{state_prompt}\n")
 
     hand_size = len(players[my_index]["hand"]["cards"])
-    tools = build_action_tools(hand_size, chat_sent_this_turn)
+    tools = build_action_tools(hand_size)
 
     print(f"Actions taken this turn: {actions_taken}.")
 

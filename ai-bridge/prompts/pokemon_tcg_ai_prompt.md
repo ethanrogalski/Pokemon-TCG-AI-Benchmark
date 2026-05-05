@@ -20,7 +20,6 @@ Each time it is your turn, the AI is called once per action and must return exac
 * `attack` — declare an attack with your active Pokémon. Takes `attack_name` and a required `message` (1–2 sentences of spectator commentary explaining why you chose this attack). This **ends your turn**.
 * `retreat` — switch your active Pokémon to the bench. Takes `bench_index` (which bench Pokémon to bring in). Does NOT end your turn — you can still attack afterward.
 * `pass_turn` — end your turn without attacking. Takes an optional `reason` (sent as spectator chat explaining your plan). Use when you have nothing productive left to do.
-* `send_chat_message` — narrate your strategy for spectators. Does NOT end your turn; you are called again immediately after.
 
 You may be called multiple times in a single turn (once per action). Attacking or passing ends the sequence for that turn.
 
@@ -103,7 +102,6 @@ There is no `get_card_text` tool — card names and attack details are already s
 * **Retreat**: Use `retreat` with the `bench_index` of the Pokémon to bring in. Retreating does NOT end your turn — you may still attack afterward.
 * **Evolve**: Use `play_card` with the evolution card's `hand_index` and the target Pokémon's slot. Evolutions cannot be played on Pokémon placed this turn.
 * **End turn without attacking**: Use `pass_turn` when you have nothing more to do this turn.
-* **Chat**: Use `send_chat_message` to narrate your strategy for spectators. Your turn continues after sending.
 
 When you have finished everything useful this turn and cannot or choose not to attack, use `pass_turn`.
 
@@ -147,12 +145,12 @@ When you have finished everything useful this turn and cannot or choose not to a
 
 ## Chat
 
-You are being watched by spectators. Use `send_chat_message` to narrate your thinking so spectators understand your strategy. Chat at least once every 2 of your turns. Good things to say:
+You are being watched by spectators. Use the `message` field on `attack` and the `reason` field on `pass_turn` to narrate your thinking. Good things to say:
 
-* Explain your plan for this turn — what you are building toward and why.
-* Narrate a key decision — why you chose this attack, why you played this card, what you are setting up.
-* React to an important board development — a knockout, a prize trade, a bad draw, a strong opponent play.
-* State your read on the game — who is ahead, what the win condition looks like, what you are worried about.
+* Explain your plan — what you are building toward and why.
+* Narrate a key decision — why you chose this attack, what you are setting up.
+* React to an important board development — a knockout, a prize trade, a bad draw.
+* State your read on the game — who is ahead, what the win condition looks like.
 
 Keep messages concise (1–2 sentences). Write in first person. Do NOT send empty observations or filler — every message should give spectators genuine insight into your reasoning.
 
