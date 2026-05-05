@@ -3,6 +3,7 @@ import json
 import os
 import sys
 import traceback
+import threading
 import socketio
 import requests
 from dotenv import load_dotenv
@@ -74,6 +75,7 @@ _current_context = None  # (players, game_state, my_index, card_names) — cache
 _waiting_for_prompt_ack = False  # True after sending resolvePrompt, until ack fires
 prompt_fail_count = 0            # consecutive rejections of the current prompt
 _server_busy = False             # True when server returned ACTION_IN_PROGRESS; cleared on next stateChange
+_state_lock = threading.Lock()  # only one stateChange processed at a time
 
 # Prompts resolved auto
 # - "Alert", "Coin flip", "WaitPrompt" = just acknowledge
@@ -100,6 +102,7 @@ def resolve_prompt(prompt, players, game_state, my_index, card_names, card_looku
     return get_ai_prompt_response(prompt, players, game_state, my_index, card_names, card_lookup, last_rejection=last_prompt_rejection, prompt_fail_count=prompt_fail_count)
 
 
+# Is our action rejected by the server?
 def _is_rejection(ack_data):
     if ack_data is None or ack_data is True:
         return False
@@ -127,7 +130,6 @@ def _take_action(players, game_state, my_index, card_names):
     action_name, action_input = get_ai_action(
         players, game_state, my_index, card_names, card_lookup, actions_this_turn,
         last_rejection=last_rejection,
-        chat_sent_this_turn=chat_sent_this_turn,
         supporter_played_this_turn=supporter_played_this_turn,
         energy_attached_this_turn=energy_attached_this_turn,
     )
@@ -153,7 +155,6 @@ def _take_action(players, game_state, my_index, card_names):
                     _server_busy = True
                     return
                 last_rejection = reason
-                _take_action(players, game_state, my_index, card_names)
             else:
                 if _is_supporter:
                     supporter_played_this_turn = True
@@ -248,6 +249,9 @@ def _take_action(players, game_state, my_index, card_names):
 
 
 def on_state_change(data):
+    if not _state_lock.acquire(blocking=False):
+        return  # another thread is already processing a stateChange — drop this one
+
     global actions_this_turn, last_turn_number, turn_passed, attack_committed, chat_sent_this_turn, supporter_played_this_turn, energy_attached_this_turn, last_sent_prompt_id, last_rejection, last_prompt_rejection, last_rejected_prompt_id, _current_context, _waiting_for_prompt_ack, prompt_fail_count, _server_busy
 
     try:
@@ -353,6 +357,8 @@ def on_state_change(data):
     except Exception:
         print("[on_state_change error]")
         traceback.print_exc()
+    finally:
+        _state_lock.release()
 
 
 # ---------------------------------------------------------

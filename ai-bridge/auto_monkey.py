@@ -20,6 +20,7 @@ import json
 import os
 import sys
 import traceback
+import threading
 import socketio
 import requests
 from dotenv import load_dotenv
@@ -111,6 +112,7 @@ _current_context = None
 _waiting_for_prompt_ack = False  # True after sending resolvePrompt, until ack fires
 prompt_fail_count = 0            # consecutive rejections of the current prompt
 _server_busy = False             # True when server returned ACTION_IN_PROGRESS; cleared on next stateChange
+_state_lock = threading.Lock()  # only one stateChange processed at a time
 
 
 def _reset_game_state():
@@ -190,7 +192,6 @@ def _take_action(players, game_state, my_index, card_names):
     action_name, action_input = get_ai_action(
         players, game_state, my_index, card_names, card_lookup, actions_this_turn,
         last_rejection=last_rejection,
-        chat_sent_this_turn=chat_sent_this_turn,
         supporter_played_this_turn=supporter_played_this_turn,
         energy_attached_this_turn=energy_attached_this_turn,
     )
@@ -250,7 +251,6 @@ def _take_action(players, game_state, my_index, card_names):
                     _server_busy = True
                     return
                 last_rejection = reason
-                _take_action(players, game_state, my_index, card_names)
             else:
                 print(f"[action] attack {attack_name!r} accepted")
 
@@ -314,6 +314,9 @@ def _take_action(players, game_state, my_index, card_names):
 # 7. State change handler
 # ---------------------------------------------------------
 def on_state_change(data):
+    if not _state_lock.acquire(blocking=False):
+        return  # another thread is already processing a stateChange — drop this one
+
     global actions_this_turn, last_turn_number, turn_passed, attack_committed
     global chat_sent_this_turn, supporter_played_this_turn, energy_attached_this_turn, last_sent_prompt_id, last_rejection, last_prompt_rejection, last_rejected_prompt_id, _current_context, _waiting_for_prompt_ack, prompt_fail_count, _server_busy
 
@@ -422,6 +425,8 @@ def on_state_change(data):
     except Exception:
         print("[on_state_change error]")
         traceback.print_exc()
+    finally:
+        _state_lock.release()
 
 
 # ---------------------------------------------------------
