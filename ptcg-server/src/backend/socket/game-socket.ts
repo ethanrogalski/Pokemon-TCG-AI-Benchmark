@@ -279,6 +279,11 @@ export class GameSocket {
       return;
     }
 
+    if (prompt.playerId !== this.client.id) {
+      response('error', ApiErrorEnum.ACTION_INVALID);
+      return;
+    }
+
     try {
       params.result = prompt.decode(params.result, game.state);
       if (prompt.validate(params.result, game.state) === false) {

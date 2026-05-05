@@ -30,7 +30,7 @@ CONDITION_NAMES = {
 }
 
 STAGE_NAMES = {
-    2: "Basic", 3: "Stage1", 4: "Stage2",
+    0: "Basic", 1: "Stage1", 2: "Stage2",
 }
 
 def _energy_name(code) -> str:
@@ -43,28 +43,149 @@ def _condition_name(code) -> str:
         return CONDITION_NAMES.get(code, str(code))
     return str(code)
 
-SYSTEM_PROMPT = """You are an expert Pokemon Trading Card Game player. Your goal is to WIN.
+SYSTEM_PROMPT = """
+# Pokémon TCG AI Agent — System Prompt
 
-RULES YOU MUST FOLLOW:
-- You can play multiple cards per turn but only ONE Supporter per turn
-- You can attach ONE energy per turn (to any Pokemon you control)
-- Only BASIC Pokemon can be played directly from hand to Bench or Active
-- Stage 1 / Stage 2 / VMAX cards are EVOLUTIONS — they can only be played onto the correct Pokemon already on your bench, NOT directly from hand
-- Trainer/Supporter/Item/Stadium cards use target_slot=BOARD
-- Energy cards use target_slot=ACTIVE (for active) or BENCH with bench_index for bench Pokemon
-- Attacking ends your turn — only attack when ready
-- "Colorless" energy cost means ANY energy type satisfies it — Fire, Psychic, Water, etc. all count
-- Attack cost shows energy types needed on the Pokemon, not a number of turns
+You are a competitive Pokémon TCG player. Your goal is to WIN the game. Play to maximize your win rate — make optimal strategic decisions, not flashy or entertaining ones. Think carefully about Energy management, board positioning, Prize trade efficiency, and sequencing within your turn.
 
-STRATEGY:
-- Early game: fill bench with Basics, attach energy to your main attacker, use draw supporters
-- Mid game: evolve when possible, keep energy building on attackers
-- Late game: attack aggressively, target knockouts for prizes
-- Always consider: can I knock out their active Pokemon this turn?
-- Use your knowledge of Pokemon TCG cards — you know what each card does
+## Win Conditions
 
-You will be called once per action. Each call you must choose ONE action. As soon as your active Pokemon can attack, attack — do not keep playing cards to delay it. If you have already played setup cards (energy, trainers, supporters) and your attacker is ready, attack immediately."""
+You win by achieving any one of these:
 
+- **Take all 6 Prize cards** — knock out enough of your opponent's Pokémon to draw all your Prizes.
+- **Opponent has no Bench** — knock out your opponent's Active Pokémon when their Bench is empty.
+- **Opponent cannot draw** — your opponent's deck is empty at the start of their draw step.
+
+Always track which win condition is most achievable given the current board state. Prioritize the fastest, most reliable path.
+
+## Game Flow
+
+Each turn you choose one action at a time using the available tools:
+
+- `play_card` — play a card from your hand (Trainer, Supporter, Item, Stadium, Basic Pokémon to Bench, or attach Energy).
+- `attack` — declare your Active Pokémon's attack. This ends your turn immediately.
+- `retreat` — retreat your Active Pokémon to the Bench and send up a Benched Pokémon.
+- `pass_turn` — end your turn without attacking when you have no more plays or cannot attack.
+
+## Turn Structure
+
+A standard Pokémon TCG turn follows this sequence. You may be prompted at any step:
+
+1. **Draw** — draw 1 card from your deck (automatic).
+2. **Trainer / Supporter / Item phase** — play any number of Item and Tool cards; play 1 Supporter per turn; play any number of Stadium cards (replaces the existing Stadium).
+3. **Attach Energy** — attach 1 Energy card from your hand to one of your Pokémon (once per turn, unless a card effect says otherwise).
+4. **Evolve** — evolve any number of Pokémon on your Bench or in the Active spot (cannot evolve a Pokémon played this turn or one already evolved this turn, and cannot evolve on your first turn).
+5. **Retreat** — optionally switch your Active Pokémon by paying the Retreat Cost in Energy (discard from the retreating Pokémon).
+6. **Use Abilities** — use any applicable Pokémon Abilities (some are once per turn, some are passive).
+7. **Attack** — declare one of your Active Pokémon's attacks if you have the required Energy attached. Attacking ends your turn.
+
+**Key rules:**
+- Steps 2–6 can be done in any order and interleaved freely. Attacking always ends the turn.
+- You may only attach 1 Energy per turn (unless a card says otherwise).
+- You may only play 1 Supporter per turn.
+- You may only use your GX attack, VSTAR Power, or ACE SPEC once per game (where applicable).
+
+## Setup Phase
+
+At game start, both players:
+
+1. Draw 7 cards as their opening hand.
+2. Place 1 Basic Pokémon face-down as their Active Pokémon.
+3. Place up to 5 Basic Pokémon face-down on the Bench.
+4. Set aside the top 6 cards of their deck face-down as Prize cards.
+
+If your opening hand has no Basic Pokémon, you must mulligan — shuffle and draw 7 again. Your opponent may draw 1 extra card for each mulligan you take.
+
+When prompted during setup:
+
+- **Select Active Pokémon** — choose the Basic Pokémon to place in the Active spot. Pick the one that best opens your game plan (a sturdy starter or one you can evolve quickly).
+- **Select Bench Pokémon** — place other Basics on the Bench to develop your board. Prioritize Pokémon you plan to evolve or that support your strategy.
+
+## Mulligans
+
+When your opening hand contains no Basic Pokémon, a mulligan is forced:
+
+- Your hand is shuffled back into your deck and you draw a new 7-card hand.
+- Your opponent may draw 1 additional card per mulligan.
+- This repeats until you have at least 1 Basic Pokémon in hand.
+
+You do not choose whether to mulligan — it is automatic when you have no Basics. However, you still decide which Pokémon to place Active and on the Bench from your new hand.
+
+## Understanding Board State Output
+
+When you receive the board state:
+
+- **Your hand** is shown in full with card names and IDs.
+- **Opponent's hand** shows only a card count.
+- **Active Pokémon** — shown for both players with: name, HP remaining, attached Energy, any Special Conditions (Poisoned, Burned, Asleep, Confused, Paralyzed), and available attacks.
+- **Bench** — shown for both players with: name, HP remaining, attached Energy.
+- **Prize cards remaining** — count for both players.
+- **Discard pile** — shown for both players (all cards visible).
+- **Stadium in play** — the currently active Stadium card, if any.
+- **Deck count** — number of cards remaining in each player's deck.
+- **Card details** (HP, attacks, Energy costs) are shown for cards in your hand and in play. Use your knowledge of Pokémon TCG cards for anything not shown.
+
+## Object IDs
+
+Every game object (cards in hand, Pokémon in play, cards in discard) has a short ID like `"p1"`, `"p2"`, etc. These IDs are stable — a card keeps its ID as it moves between zones. Use `choose_action(choice="p3")` to select by ID. Use short IDs with `get_card_text(object_id="p3")` for card lookups.
+
+## How Actions Work
+
+- **Play a card**: Cards listed in your choices are confirmed playable. Play with `choose_action(choice="p3")`.
+- **Attach Energy**: When prompted, select the Energy card from your hand and the target Pokémon.
+- **Select a target**: When an effect requires a target (e.g., Boss's Orders targeting a Benched Pokémon, or a Trainer targeting a card in your discard pile), choose from the listed options by ID.
+- **Declare an attack**: Select one of your Active Pokémon's attacks. Attacking ends your turn immediately.
+- **Retreat**: Select your Active Pokémon to retreat, pay the Energy cost, then select a Benched Pokémon to become the new Active.
+- **Evolve**: Select the evolution card from your hand, then select the Pokémon in play to evolve.
+- **Use Ability**: Select the Pokémon whose Ability you want to activate.
+- **End turn without attacking**: Use `pass_action` if you choose not to attack or cannot attack.
+
+When you see a list of playable cards or actions, passing (`choice="no"` or `pass_action`) means you are done with that step. Make sure you have done everything you want first.
+
+## Strategic Priorities
+
+### Energy Management
+- Attach Energy every turn — never waste an attachment.
+- Prioritize powering up your main attacker. Have a backup attacker charging on the Bench.
+- Track how many turns until each of your Pokémon can attack.
+
+### Prize Trade Efficiency
+- Prefer knockouts that take fewer Prizes for your opponent when they retaliate. Trading a single-Prize Pokémon for a multi-Prize knockout (Pokémon-EX, V, VSTAR, VMAX) is ideal.
+- Track Prize counts for both players. When ahead on Prizes, play conservatively; when behind, look for efficient trades or big swings.
+
+### Board Positioning
+- Maintain at least 2–3 Pokémon on your Bench at all times to avoid losing if your Active is knocked out.
+- Set up your next attacker on the Bench before your current attacker goes down.
+- Use Retreat, Switch, and gust effects (Boss's Orders, etc.) strategically to target the opponent's vulnerable Bench Pokémon.
+
+### Sequencing Within a Turn
+- **Draw and search effects first** — play Supporters, Item draw cards, and search cards before committing to other plays. More information means better decisions.
+- **Evolve whenever possible** — always evolve before attaching Energy or attacking. Check EVOLUTION OPPORTUNITIES in the board state each turn. Evolving is almost always correct — it increases HP, unlocks stronger attacks, and grants Abilities.
+- **Plan Energy for the final evolution** — attach Energy based on what the fully evolved form needs, not the Basic or Stage 1. Check the final evolution's attack costs in the card data and stop attaching once you have enough.
+- **Evolve before using Abilities** — some evolutions grant Abilities you want to use this turn.
+- **Use Abilities before attaching Energy** — some Abilities (e.g., Energy acceleration) may change where you want your manual attachment to go.
+- **Attach Energy before attacking** — you must have the required Energy attached to use an attack.
+- **Attack last** — attacking always ends your turn, so do everything else first.
+
+### Special Conditions
+- **Poisoned**: 1 damage counter between turns. Low threat but cumulative.
+- **Burned**: Flip a coin between turns; heads = 2 damage counters, tails = no damage. Consider retreating.
+- **Asleep**: Flip a coin between turns to wake up; cannot attack or retreat while Asleep.
+- **Confused**: Flip a coin when attacking; tails = 3 damage counters to yourself instead.
+- **Paralyzed**: Cannot attack or retreat for one turn; auto-clears after your next turn.
+- Retreating or evolving clears all Special Conditions. Switching effects (Switch, Escape Rope, etc.) also clear them.
+
+## Chat
+
+Use `send_chat_message` to talk to your opponent during the game. Chat at least once every 2 turn cycles (a turn cycle = each player taking one turn). Ideas for what to say:
+
+- React to big plays — a clutch Supporter, an unexpected knockout, or a whiffed draw.
+- Comment on the board state or your evolving strategy.
+- Respond to opponent messages — always reply when they talk to you!
+- Trash-talk, compliment a good play, or narrate what you are thinking.
+
+Check the `recent_chat` field in output to see what the opponent is saying. Do not play in silence — engage with your opponent. The game is more fun when players interact.
+"""
 
 def get_card_name(card_id, card_names):
     if isinstance(card_id, int) and 0 <= card_id < len(card_names):
@@ -87,6 +208,8 @@ def describe_pokemon_slot(poke_list, card_names, card_lookup):
     energies = [get_card_name(e, card_names) for e in energy_ids]
 
     attacks = card_info.get("attacks", [])
+    abilities = card_info.get("powers", [])
+    retreat = card_info.get("retreat", [])
     conditions = poke_list.get("specialConditions", [])
 
     return {
@@ -95,6 +218,8 @@ def describe_pokemon_slot(poke_list, card_names, card_lookup):
         "damage": damage,
         "energies": energies,
         "attacks": attacks,
+        "abilities": abilities,
+        "retreat": retreat,
         "conditions": conditions,
     }
 
@@ -147,58 +272,148 @@ def build_state_prompt(players, game_state, my_index, card_names, card_lookup):
         "YOUR ACTIVE POKEMON:",
     ]
 
-    if my_active:
-        attached_count = len(my_active["energies"])
-        # Format attack into a string
-        # Tells AI properties about the attack (specifically can use)
-        def _fmt_attack(a):
-            cost = a.get("cost", [])
-            cost_str = '+'.join(_energy_name(c) for c in cost)
-            needed = len(cost)
-            usable = "CAN USE" if attached_count >= needed else f"CANNOT USE (need {needed} energy, have {attached_count})"
-            return f"{a['name']} [{a.get('damage', '?')} dmg, cost: {cost_str}] ({usable})"
-        attack_str = (
-            ", ".join(_fmt_attack(a) for a in my_active["attacks"])
-            if my_active["attacks"]
-            else "unknown (use your knowledge of this card)"
-        )
+    def _fmt_attack_mine(a, attached_count):
+        cost = a.get("cost", [])
+        cost_str = '+'.join(_energy_name(c) for c in cost)
+        needed = len(cost)
+        usable = "CAN USE" if attached_count >= needed else f"CANNOT USE (need {needed} energy, have {attached_count})"
+        text = a.get("text", "")
+        effect = f" — {text}" if text else ""
+        return f"    {a['name']} [{a.get('damage', '?')} dmg, cost: {cost_str}]{effect} ({usable})"
+
+    def _fmt_attack_opp(a):
+        cost = a.get("cost", [])
+        cost_str = '+'.join(_energy_name(c) for c in cost)
+        text = a.get("text", "")
+        effect = f" — {text}" if text else ""
+        return f"    {a['name']} [{a.get('damage', '?')} dmg, cost: {cost_str}]{effect}"
+
+    def _fmt_ability(p):
+        return f"    [Ability] {p.get('name', '?')}: {p.get('text', '')}"
+
+    def _fmt_retreat(retreat):
+        if not retreat:
+            return "free"
+        return '+'.join(_energy_name(c) for c in retreat)
+
+    def _append_pokemon_lines(lines, poke, is_mine=True):
+        attached_count = len(poke["energies"])
         lines += [
-            f"  {my_active['name']} | HP: {my_active['hp']} | Damage taken: {my_active['damage']}",
-            f"  Energy attached: {', '.join(my_active['energies']) if my_active['energies'] else 'none'}",
-            f"  Attacks: {attack_str}",
-            f"  Special conditions: {', '.join(_condition_name(c) for c in my_active['conditions']) if my_active['conditions'] else 'none'}",
+            f"  {poke['name']} | HP: {poke['hp']} | Damage taken: {poke['damage']} "
+            f"| Retreat cost: {_fmt_retreat(poke['retreat'])}",
+            f"  Energy attached: {', '.join(poke['energies']) if poke['energies'] else 'none'}",
+            f"  Conditions: {', '.join(_condition_name(c) for c in poke['conditions']) if poke['conditions'] else 'none'}",
         ]
+        if poke["abilities"]:
+            lines.append("  Abilities:")
+            lines += [_fmt_ability(p) for p in poke["abilities"]]
+        if poke["attacks"]:
+            lines.append("  Attacks:")
+            if is_mine:
+                lines += [_fmt_attack_mine(a, attached_count) for a in poke["attacks"]]
+            else:
+                lines += [_fmt_attack_opp(a) for a in poke["attacks"]]
+        else:
+            lines.append("  Attacks: unknown (use your knowledge of this card)")
+
+    if my_active:
+        _append_pokemon_lines(lines, my_active, is_mine=True)
     else:
         lines.append("  (none - you must play a Basic Pokemon to Active)")
 
     lines += ["", "YOUR BENCH:"]
     if my_bench:
         for b in my_bench:
-            lines.append(
-                f"  {b['name']} | HP: {b['hp']} | Damage: {b['damage']} "
-                f"| Energy: {', '.join(b['energies']) if b['energies'] else 'none'}"
-            )
+            _append_pokemon_lines(lines, b, is_mine=True)
     else:
         lines.append("  (empty)")
 
     lines += ["", "OPPONENT'S ACTIVE POKEMON:"]
     if opp_active:
-        lines += [
-            f"  {opp_active['name']} | HP: {opp_active['hp']} | Damage taken: {opp_active['damage']}",
-            f"  Special conditions: {', '.join(opp_active['conditions']) if opp_active['conditions'] else 'none'}",
-        ]
+        _append_pokemon_lines(lines, opp_active, is_mine=False)
     else:
         lines.append("  (none)")
 
     lines += ["", "OPPONENT'S BENCH:"]
     if opp_bench:
         for b in opp_bench:
-            lines.append(
-                f"  {b['name']} | HP: {b['hp']} | Damage: {b['damage']} "
-                f"| Energy: {', '.join(b['energies']) if b['energies'] else 'none'}"
-            )
+            _append_pokemon_lines(lines, b, is_mine=False)
     else:
         lines.append("  (empty)")
+
+    def _fmt_discard(player):
+        discard_ids = player.get("discard", {}).get("cards", [])
+        if not discard_ids:
+            return ["  (empty)"]
+        from collections import Counter
+        name_counts = Counter(get_card_name(c, card_names) for c in discard_ids)
+        result = []
+        seen = set()
+        for card_id in discard_ids:
+            name = get_card_name(card_id, card_names)
+            if name in seen:
+                continue
+            seen.add(name)
+            count_str = f" x{name_counts[name]}" if name_counts[name] > 1 else ""
+            info = card_lookup.get(name, {})
+            super_type = info.get("superType", "")
+            if super_type == "Pokemon":
+                result.append(f"  {name}{count_str} (Pokemon | HP: {info.get('hp', '?')})")
+                for p in info.get("powers", []):
+                    result.append(f"    [Ability] {p.get('name', '?')}: {p.get('text', '')}")
+                for a in info.get("attacks", []):
+                    cost_str = '+'.join(_energy_name(c) for c in a.get("cost", []))
+                    text = a.get("text", "")
+                    effect = f" — {text}" if text else ""
+                    result.append(f"    {a['name']} [{a.get('damage', '?')} dmg, cost: {cost_str}]{effect}")
+            elif super_type == "Trainer":
+                trainer_type = info.get("trainerType", "")
+                card_text = info.get("text", "")
+                result.append(f"  {name}{count_str} ({trainer_type}){': ' + card_text if card_text else ''}")
+            else:
+                result.append(f"  {name}{count_str}")
+        return result
+
+    # Build evolution opportunities: match hand evolution cards to in-play Pokemon they can evolve
+    evo_lines = []
+    in_play = []
+    if my_active:
+        in_play.append(("ACTIVE", None, my_active["name"]))
+    for bi, b in enumerate(my_bench):
+        in_play.append(("BENCH", bi, b["name"]))
+
+    for i, card_id in enumerate(me["hand"]["cards"]):
+        name = get_card_name(card_id, card_names)
+        info = card_lookup.get(name, {})
+        if info.get("superType") != "Pokemon":
+            continue
+        evolves_from = info.get("evolvesFrom", "")
+        if not evolves_from:
+            continue
+        for slot_label, bench_idx, in_play_name in in_play:
+            if in_play_name.lower() == evolves_from.lower():
+                target = slot_label if slot_label == "ACTIVE" else f"BENCH slot {bench_idx}"
+                # Find the final evolution chain to show expected energy cost
+                final_attacks = info.get("attacks", [])
+                min_cost = min((len(a.get("cost", [])) for a in final_attacks), default="?")
+                evo_lines.append(
+                    f"  Hand [{i}] {name} can evolve your {in_play_name} ({target}) — "
+                    f"use play_card(hand_index={i}, target_slot='{slot_label}'"
+                    + (f", bench_index={bench_idx}" if bench_idx is not None else "")
+                    + f") | {name} cheapest attack costs {min_cost} energy"
+                )
+
+    if evo_lines:
+        lines += ["", "EVOLUTION OPPORTUNITIES (use these before attaching energy or attacking):"]
+        lines += evo_lines
+    else:
+        lines += ["", "EVOLUTION OPPORTUNITIES: none available this turn"]
+
+    lines += ["", "YOUR DISCARD PILE:"]
+    lines += _fmt_discard(me)
+
+    lines += ["", "OPPONENT'S DISCARD PILE:"]
+    lines += _fmt_discard(opp)
 
     return "\n".join(lines)
 
@@ -478,8 +693,10 @@ def get_ai_action(players, game_state, my_index, card_names, card_lookup, action
         {
             "name": "play_card",
             "description": (
-                "Play a card from your hand. Use for trainers, supporters, items, stadiums, "
-                "playing Basic Pokemon to bench, or attaching energy to a Pokemon."
+                "Play a card from your hand. Use for: playing Basic Pokemon to bench, "
+                "evolving a Pokemon in play (Stage 1 / Stage 2), attaching energy, "
+                "or playing trainers/supporters/items/stadiums. "
+                "Check EVOLUTION OPPORTUNITIES in the state for exact hand_index and target_slot to use."
             ),
             "input_schema": {
                 "type": "object",
@@ -492,9 +709,9 @@ def get_ai_action(players, game_state, my_index, card_names, card_lookup, action
                         "type": "string",
                         "enum": ["BOARD", "ACTIVE", "BENCH"],
                         "description": (
-                            "BOARD: for trainers/supporters/items/stadiums. "
-                            "ACTIVE: to place first Pokemon or attach energy to active. "
-                            "BENCH: to place a Basic Pokemon on bench or attach energy to bench Pokemon."
+                            "BOARD: trainers/supporters/items/stadiums. "
+                            "ACTIVE: place first Basic Pokemon, attach energy to active, or evolve the Active Pokemon. "
+                            "BENCH: place a Basic Pokemon, attach energy to a bench Pokemon, or evolve a bench Pokemon (requires bench_index)."
                         ),
                     },
                     "bench_index": {
