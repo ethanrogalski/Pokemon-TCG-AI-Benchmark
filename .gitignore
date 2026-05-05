@@ -37,7 +37,10 @@ Thumbs.db
 # Claude Code artifacts
 .claude/
 
-*.md
+.claude/commands/implement-set.md
+Set_Up_DBeaver.md
+src/**/*.md
+CLAUDE.md
 
 # Python
 /__pycache__
