@@ -16,6 +16,8 @@ Contract:
 
 # change two lines below to specific ai agent
 import anthropic
+import json as _json
+import os as _os
 
 anthropic_client = anthropic.AnthropicBedrock()
 
@@ -30,7 +32,7 @@ CONDITION_NAMES = {
 }
 
 STAGE_NAMES = {
-    0: "Basic", 1: "Stage1", 2: "Stage2",
+    2: "Basic", 3: "Stage1", 4: "Stage2",
 }
 
 def _energy_name(code) -> str:
@@ -43,149 +45,13 @@ def _condition_name(code) -> str:
         return CONDITION_NAMES.get(code, str(code))
     return str(code)
 
-SYSTEM_PROMPT = """
-# Pokémon TCG AI Agent — System Prompt
+_PROMPT_PATH = _os.path.join(_os.path.dirname(__file__), "prompts", "pokemon_tcg_ai_prompt.md")
+with open(_PROMPT_PATH, encoding="utf-8") as _f:
+    SYSTEM_PROMPT = _f.read()
 
-You are a competitive Pokémon TCG player. Your goal is to WIN the game. Play to maximize your win rate — make optimal strategic decisions, not flashy or entertaining ones. Think carefully about Energy management, board positioning, Prize trade efficiency, and sequencing within your turn.
+from prompts.rejection_messages import REJECTION_MESSAGES
+from prompts.tools import build_action_tools
 
-## Win Conditions
-
-You win by achieving any one of these:
-
-- **Take all 6 Prize cards** — knock out enough of your opponent's Pokémon to draw all your Prizes.
-- **Opponent has no Bench** — knock out your opponent's Active Pokémon when their Bench is empty.
-- **Opponent cannot draw** — your opponent's deck is empty at the start of their draw step.
-
-Always track which win condition is most achievable given the current board state. Prioritize the fastest, most reliable path.
-
-## Game Flow
-
-Each turn you choose one action at a time using the available tools:
-
-- `play_card` — play a card from your hand (Trainer, Supporter, Item, Stadium, Basic Pokémon to Bench, or attach Energy).
-- `attack` — declare your Active Pokémon's attack. This ends your turn immediately.
-- `retreat` — retreat your Active Pokémon to the Bench and send up a Benched Pokémon.
-- `pass_turn` — end your turn without attacking when you have no more plays or cannot attack.
-
-## Turn Structure
-
-A standard Pokémon TCG turn follows this sequence. You may be prompted at any step:
-
-1. **Draw** — draw 1 card from your deck (automatic).
-2. **Trainer / Supporter / Item phase** — play any number of Item and Tool cards; play 1 Supporter per turn; play any number of Stadium cards (replaces the existing Stadium).
-3. **Attach Energy** — attach 1 Energy card from your hand to one of your Pokémon (once per turn, unless a card effect says otherwise).
-4. **Evolve** — evolve any number of Pokémon on your Bench or in the Active spot (cannot evolve a Pokémon played this turn or one already evolved this turn, and cannot evolve on your first turn).
-5. **Retreat** — optionally switch your Active Pokémon by paying the Retreat Cost in Energy (discard from the retreating Pokémon).
-6. **Use Abilities** — use any applicable Pokémon Abilities (some are once per turn, some are passive).
-7. **Attack** — declare one of your Active Pokémon's attacks if you have the required Energy attached. Attacking ends your turn.
-
-**Key rules:**
-- Steps 2–6 can be done in any order and interleaved freely. Attacking always ends the turn.
-- You may only attach 1 Energy per turn (unless a card says otherwise).
-- You may only play 1 Supporter per turn.
-- You may only use your GX attack, VSTAR Power, or ACE SPEC once per game (where applicable).
-
-## Setup Phase
-
-At game start, both players:
-
-1. Draw 7 cards as their opening hand.
-2. Place 1 Basic Pokémon face-down as their Active Pokémon.
-3. Place up to 5 Basic Pokémon face-down on the Bench.
-4. Set aside the top 6 cards of their deck face-down as Prize cards.
-
-If your opening hand has no Basic Pokémon, you must mulligan — shuffle and draw 7 again. Your opponent may draw 1 extra card for each mulligan you take.
-
-When prompted during setup:
-
-- **Select Active Pokémon** — choose the Basic Pokémon to place in the Active spot. Pick the one that best opens your game plan (a sturdy starter or one you can evolve quickly).
-- **Select Bench Pokémon** — place other Basics on the Bench to develop your board. Prioritize Pokémon you plan to evolve or that support your strategy.
-
-## Mulligans
-
-When your opening hand contains no Basic Pokémon, a mulligan is forced:
-
-- Your hand is shuffled back into your deck and you draw a new 7-card hand.
-- Your opponent may draw 1 additional card per mulligan.
-- This repeats until you have at least 1 Basic Pokémon in hand.
-
-You do not choose whether to mulligan — it is automatic when you have no Basics. However, you still decide which Pokémon to place Active and on the Bench from your new hand.
-
-## Understanding Board State Output
-
-When you receive the board state:
-
-- **Your hand** is shown in full with card names and IDs.
-- **Opponent's hand** shows only a card count.
-- **Active Pokémon** — shown for both players with: name, HP remaining, attached Energy, any Special Conditions (Poisoned, Burned, Asleep, Confused, Paralyzed), and available attacks.
-- **Bench** — shown for both players with: name, HP remaining, attached Energy.
-- **Prize cards remaining** — count for both players.
-- **Discard pile** — shown for both players (all cards visible).
-- **Stadium in play** — the currently active Stadium card, if any.
-- **Deck count** — number of cards remaining in each player's deck.
-- **Card details** (HP, attacks, Energy costs) are shown for cards in your hand and in play. Use your knowledge of Pokémon TCG cards for anything not shown.
-
-## Object IDs
-
-Every game object (cards in hand, Pokémon in play, cards in discard) has a short ID like `"p1"`, `"p2"`, etc. These IDs are stable — a card keeps its ID as it moves between zones. Use `choose_action(choice="p3")` to select by ID. Use short IDs with `get_card_text(object_id="p3")` for card lookups.
-
-## How Actions Work
-
-- **Play a card**: Cards listed in your choices are confirmed playable. Play with `choose_action(choice="p3")`.
-- **Attach Energy**: When prompted, select the Energy card from your hand and the target Pokémon.
-- **Select a target**: When an effect requires a target (e.g., Boss's Orders targeting a Benched Pokémon, or a Trainer targeting a card in your discard pile), choose from the listed options by ID.
-- **Declare an attack**: Select one of your Active Pokémon's attacks. Attacking ends your turn immediately.
-- **Retreat**: Select your Active Pokémon to retreat, pay the Energy cost, then select a Benched Pokémon to become the new Active.
-- **Evolve**: Select the evolution card from your hand, then select the Pokémon in play to evolve.
-- **Use Ability**: Select the Pokémon whose Ability you want to activate.
-- **End turn without attacking**: Use `pass_action` if you choose not to attack or cannot attack.
-
-When you see a list of playable cards or actions, passing (`choice="no"` or `pass_action`) means you are done with that step. Make sure you have done everything you want first.
-
-## Strategic Priorities
-
-### Energy Management
-- Attach Energy every turn — never waste an attachment.
-- Prioritize powering up your main attacker. Have a backup attacker charging on the Bench.
-- Track how many turns until each of your Pokémon can attack.
-
-### Prize Trade Efficiency
-- Prefer knockouts that take fewer Prizes for your opponent when they retaliate. Trading a single-Prize Pokémon for a multi-Prize knockout (Pokémon-EX, V, VSTAR, VMAX) is ideal.
-- Track Prize counts for both players. When ahead on Prizes, play conservatively; when behind, look for efficient trades or big swings.
-
-### Board Positioning
-- Maintain at least 2–3 Pokémon on your Bench at all times to avoid losing if your Active is knocked out.
-- Set up your next attacker on the Bench before your current attacker goes down.
-- Use Retreat, Switch, and gust effects (Boss's Orders, etc.) strategically to target the opponent's vulnerable Bench Pokémon.
-
-### Sequencing Within a Turn
-- **Draw and search effects first** — play Supporters, Item draw cards, and search cards before committing to other plays. More information means better decisions.
-- **Evolve whenever possible** — always evolve before attaching Energy or attacking. Check EVOLUTION OPPORTUNITIES in the board state each turn. Evolving is almost always correct — it increases HP, unlocks stronger attacks, and grants Abilities.
-- **Plan Energy for the final evolution** — attach Energy based on what the fully evolved form needs, not the Basic or Stage 1. Check the final evolution's attack costs in the card data and stop attaching once you have enough.
-- **Evolve before using Abilities** — some evolutions grant Abilities you want to use this turn.
-- **Use Abilities before attaching Energy** — some Abilities (e.g., Energy acceleration) may change where you want your manual attachment to go.
-- **Attach Energy before attacking** — you must have the required Energy attached to use an attack.
-- **Attack last** — attacking always ends your turn, so do everything else first.
-
-### Special Conditions
-- **Poisoned**: 1 damage counter between turns. Low threat but cumulative.
-- **Burned**: Flip a coin between turns; heads = 2 damage counters, tails = no damage. Consider retreating.
-- **Asleep**: Flip a coin between turns to wake up; cannot attack or retreat while Asleep.
-- **Confused**: Flip a coin when attacking; tails = 3 damage counters to yourself instead.
-- **Paralyzed**: Cannot attack or retreat for one turn; auto-clears after your next turn.
-- Retreating or evolving clears all Special Conditions. Switching effects (Switch, Escape Rope, etc.) also clear them.
-
-## Chat
-
-Use `send_chat_message` to talk to your opponent during the game. Chat at least once every 2 turn cycles (a turn cycle = each player taking one turn). Ideas for what to say:
-
-- React to big plays — a clutch Supporter, an unexpected knockout, or a whiffed draw.
-- Comment on the board state or your evolving strategy.
-- Respond to opponent messages — always reply when they talk to you!
-- Trash-talk, compliment a good play, or narrate what you are thinking.
-
-Check the `recent_chat` field in output to see what the opponent is saying. Do not play in silence — engage with your opponent. The game is more fun when players interact.
-"""
 
 def get_card_name(card_id, card_names):
     if isinstance(card_id, int) and 0 <= card_id < len(card_names):
@@ -223,8 +89,9 @@ def describe_pokemon_slot(poke_list, card_names, card_lookup):
         "conditions": conditions,
     }
 
-
-def build_state_prompt(players, game_state, my_index, card_names, card_lookup):
+# Takes game state and turns it into string describing the current situation.
+# Fed into Claude.
+def build_state_prompt(players, game_state, my_index, card_names, card_lookup, supporter_played_this_turn=False, energy_attached_this_turn=False):
     me = players[my_index]
     opp = players[1 - my_index]
 
@@ -393,7 +260,6 @@ def build_state_prompt(players, game_state, my_index, card_names, card_lookup):
         for slot_label, bench_idx, in_play_name in in_play:
             if in_play_name.lower() == evolves_from.lower():
                 target = slot_label if slot_label == "ACTIVE" else f"BENCH slot {bench_idx}"
-                # Find the final evolution chain to show expected energy cost
                 final_attacks = info.get("attacks", [])
                 min_cost = min((len(a.get("cost", [])) for a in final_attacks), default="?")
                 evo_lines.append(
@@ -414,6 +280,36 @@ def build_state_prompt(players, game_state, my_index, card_names, card_lookup):
 
     lines += ["", "OPPONENT'S DISCARD PILE:"]
     lines += _fmt_discard(opp)
+
+    my_deck_count = len(me.get("deck", {}).get("cards", []))
+    opp_deck_count = len(opp.get("deck", {}).get("cards", []))
+    lines.append(f"\nDECK SIZES: You {my_deck_count} | Opponent {opp_deck_count}")
+
+    stadium_card = None
+    for p in players:
+        cards = p.get("stadium", {}).get("cards", [])
+        if cards:
+            stadium_card = get_card_name(cards[0], card_names)
+            break
+    lines.append(f"\nSTADIUM IN PLAY: {stadium_card or 'none'}")
+
+    chat_lines = [
+        f"  {'You' if log.get('client') == my_index else 'Opponent'}: {log.get('params', {}).get('text', '')}"
+        for log in game_state.get("logs", [])
+        if log.get("message") == "LOG_TEXT"
+    ]
+    if chat_lines:
+        lines += ["\nRECENT CHAT:"] + chat_lines
+
+    restrictions = []
+    if turn == 1:
+        restrictions.append("It is Turn 1 — you CANNOT attack this turn.")
+    if supporter_played_this_turn:
+        restrictions.append("Supporter already played — do NOT play another Supporter this turn.")
+    if energy_attached_this_turn:
+        restrictions.append("Energy already attached this turn — do NOT attach another Energy card.")
+    if restrictions:
+        lines.append("\nTURN RESTRICTIONS: " + " | ".join(restrictions))
 
     return "\n".join(lines)
 
@@ -461,10 +357,13 @@ def _ask_AI_action(state_summary, description, tools, max_tokens=1024):
 
 # Many prompt types
 # Show mulligan, show cards, select, selectOption, confirm cards, choose cards, choose pokemon
-# Should also add attach energy 
-def get_ai_prompt_response(prompt, players, game_state, my_index, card_names, card_lookup):
+# Should also add attach energy
+def get_ai_prompt_response(prompt, players, game_state, my_index, card_names, card_lookup, last_rejection=None, prompt_fail_count=0):
     ptype = prompt.get("type", "")
     message = prompt.get("message", "Make a choice.")
+    if last_rejection:
+        explanation = next((v for k, v in REJECTION_MESSAGES.items() if k in str(last_rejection)), f"Server rejected your answer: {last_rejection}")
+        message = f"PREVIOUS ANSWER REJECTED — {explanation}\nYou must choose differently.\n\n{message}"
     opts = prompt.get("options", {})
     state_summary = build_state_prompt(players, game_state, my_index, card_names, card_lookup)
 
@@ -510,51 +409,104 @@ def get_ai_prompt_response(prompt, players, game_state, my_index, card_names, ca
         filter_trainer = prompt_filter.get("trainerType")
         min_count = opts.get("min", 0)
         max_count = opts.get("max", 1)
+        max_basics = opts.get("maxBasics")      # None = no limit
+        max_evolutions = opts.get("maxEvolutions")  # None = no limit
 
         # Exclude blocked indices (server marks these as unselectable).
-        # If a card isn't in card_lookup, include it unless it's blocked.
         blocked = set(opts.get("blocked", []))
         eligible = []
         for i, card_id in enumerate(cards_data):
             if i in blocked:
                 continue
             name = get_card_name(card_id, card_names)
-            info = card_lookup.get(name)  # None if not found
+            info = card_lookup.get(name)
             if info is not None:
                 if filter_super and info.get("superType") != filter_super:
                     continue
                 if filter_trainer and info.get("trainerType") != filter_trainer:
                     continue
-            eligible.append((i, name))
+            eligible.append((i, name, info))
 
         print(f"[prompt] Choose cards: {len(eligible)} eligible of {len(cards_data)}, min={min_count} max={max_count}")
 
         if not eligible:
-            return []  # min=0; nothing eligible, pick nothing
+            return []
 
-        cards_str = "\n".join(f"  [{j}] {name}" for j, (_, name) in enumerate(eligible))
+        if prompt_fail_count >= 2 and min_count == 0:
+            print(f"[prompt] Choose cards: {prompt_fail_count} consecutive rejections, min=0 — sending empty selection as fallback")
+            return []
+
+        # Returns the stage string used for labels AND for constraint enforcement.
+        # "Basic", "Stage1", "Stage2" — both Stage1 and Stage2 count as evolutions.
+        def _card_kind(info):
+            if info is None:
+                return ""
+            return STAGE_NAMES.get(info.get("stage"), "")
+
+        card_lines = []
+        for j, (_, name, info) in enumerate(eligible):
+            kind = _card_kind(info)
+            evolves_from = (info or {}).get("evolvesFrom", "")
+            if kind == "Stage1" and evolves_from:
+                label = f"Stage 1, evolves from {evolves_from}"
+            elif kind == "Stage2" and evolves_from:
+                label = f"Stage 2, evolves from {evolves_from}"
+            elif kind == "Basic":
+                label = "Basic"
+            else:
+                label = kind
+            suffix = f" [{label}]" if label else ""
+            card_lines.append(f"  [{j}] {name}{suffix}")
+        cards_str = "\n".join(card_lines)
+
+        # Dump all opts except `blocked` (already applied above as the eligible filter).
+        opts_for_claude = {k: v for k, v in opts.items() if k != "blocked"}
+        constraint_str = f"Server constraints (you MUST respect ALL of these): {_json.dumps(opts_for_claude)}"
+
         result = _ask_AI(
             state_summary,
-            f"{message}\nEligible cards:\n{cards_str}\nChoose {min_count} to {max_count}.",
+            f"{message}\nEligible cards (blocked indices already removed):\n{cards_str}\n{constraint_str}",
             {
                 "name": "choose_cards",
-                "description": f"Choose {min_count}-{max_count} cards by index.",
+                "description": f"Choose {min_count}-{max_count} cards by eligible-list index. Obey all server constraints.",
                 "input_schema": {
                     "type": "object",
                     "properties": {
                         "indices": {
                             "type": "array",
                             "items": {"type": "integer"},
-                            "description": f"Indices into the eligible list above (0 to {max(0, len(eligible)-1)})",
+                            "description": f"Indices into the eligible list above (0 to {max(0, len(eligible)-1)}). Must satisfy all constraints in opts.",
                         }
                     },
                     "required": ["indices"],
                 },
             },
         )
-        ai_indices = result["indices"] if result else list(range(min(min_count, len(eligible))))
-        print(f"[prompt] AI chose eligible indices {ai_indices} → original indices {[eligible[j][0] for j in ai_indices if j < len(eligible)]}")
-        return [eligible[j][0] for j in ai_indices if j < len(eligible)][:max_count]
+        ai_indices = result.get("indices", []) if isinstance(result, dict) else list(range(min(min_count, len(eligible))))
+
+        # Safety net: enforce maxBasics/maxEvolutions even if Claude ignored them.
+        validated = []
+        basics_used = 0
+        evos_used = 0
+        for j in ai_indices:
+            if j >= len(eligible) or len(validated) >= max_count:
+                continue
+            _, _, info = eligible[j]
+            kind = _card_kind(info)
+            if kind == "Basic":
+                if max_basics is not None and basics_used >= max_basics:
+                    continue
+                basics_used += 1
+            elif kind in ("Stage1", "Stage2"):
+                if max_evolutions is not None and evos_used >= max_evolutions:
+                    continue
+                evos_used += 1
+            validated.append(j)
+
+        # (code-level energy deduplication removed — rejection message now explains the constraint)
+
+        print(f"[prompt] AI chose eligible indices {ai_indices} → validated {validated} → original indices {[eligible[j][0] for j in validated]}")
+        return [eligible[j][0] for j in validated]
 
     elif ptype == "Choose pokemon":
         print(f"Prompt pokemon options: {opts}")
@@ -599,7 +551,7 @@ def get_ai_prompt_response(prompt, players, game_state, my_index, card_names, ca
                 },
             },
         )
-        chosen = (result["indices"] if result else [0])[:max_count]
+        chosen = (result.get("indices", [0]) if isinstance(result, dict) else [0])[:max_count]
         return [
             {"player": targets[i]["player"], "slot": targets[i]["slot"], "index": targets[i]["index"]}
             for i in chosen if i < len(targets)
@@ -681,112 +633,29 @@ def get_ai_prompt_response(prompt, players, game_state, my_index, card_names, ca
     return None
 
 
-def get_ai_action(players, game_state, my_index, card_names, card_lookup, actions_taken=0, last_rejection=None):
+def get_ai_action(players, game_state, my_index, card_names, card_lookup, actions_taken=0, last_rejection=None, chat_sent_this_turn=False, supporter_played_this_turn=False, energy_attached_this_turn=False):
     state_prompt = build_state_prompt(
-        players, game_state, my_index, card_names, card_lookup
+        players, game_state, my_index, card_names, card_lookup,
+        supporter_played_this_turn=supporter_played_this_turn,
+        energy_attached_this_turn=energy_attached_this_turn,
     )
     print(f"\n{state_prompt}\n")
 
     hand_size = len(players[my_index]["hand"]["cards"])
+    tools = build_action_tools(hand_size, chat_sent_this_turn)
 
-    tools = [
-        {
-            "name": "play_card",
-            "description": (
-                "Play a card from your hand. Use for: playing Basic Pokemon to bench, "
-                "evolving a Pokemon in play (Stage 1 / Stage 2), attaching energy, "
-                "or playing trainers/supporters/items/stadiums. "
-                "Check EVOLUTION OPPORTUNITIES in the state for exact hand_index and target_slot to use."
-            ),
-            "input_schema": {
-                "type": "object",
-                "properties": {
-                    "hand_index": {
-                        "type": "integer",
-                        "description": f"Index of the card in hand (0 to {max(0, hand_size - 1)})",
-                    },
-                    "target_slot": {
-                        "type": "string",
-                        "enum": ["BOARD", "ACTIVE", "BENCH"],
-                        "description": (
-                            "BOARD: trainers/supporters/items/stadiums. "
-                            "ACTIVE: place first Basic Pokemon, attach energy to active, or evolve the Active Pokemon. "
-                            "BENCH: place a Basic Pokemon, attach energy to a bench Pokemon, or evolve a bench Pokemon (requires bench_index)."
-                        ),
-                    },
-                    "bench_index": {
-                        "type": "integer",
-                        "description": "Which bench slot (0-4). Required when target_slot=BENCH.",
-                    },
-                },
-                "required": ["hand_index", "target_slot"],
-            },
-        },
-        {
-            "name": "attack",
-            "description": "Use your active Pokemon's attack. This ENDS your turn. Choose this whenever your active Pokemon has enough energy to use an attack — don't delay attacking by playing unnecessary cards.",
-            "input_schema": {
-                "type": "object",
-                "properties": {
-                    "attack_name": {
-                        "type": "string",
-                        "description": "The exact name of the attack. Use your knowledge of the card.",
-                    }
-                },
-                "required": ["attack_name"],
-            },
-        },
-        {
-            "name": "retreat",
-            "description": (
-                "Retreat your active Pokemon to the bench, replacing it with a bench Pokemon. "
-                "Use when your active Pokemon is about to be knocked out and you have a better "
-                "attacker on the bench. Costs retreat energy."
-            ),
-            "input_schema": {
-                "type": "object",
-                "properties": {
-                    "bench_index": {
-                        "type": "integer",
-                        "description": "0-based index of the bench Pokemon to switch in (0-4).",
-                    }
-                },
-                "required": ["bench_index"],
-            },
-        },
-        {
-            "name": "pass_turn",
-            "description": "End your turn without attacking. Use when you have no energy to attack, or when you have already played the cards you needed and attacking is not yet possible.",
-            "input_schema": {
-                "type": "object",
-                "properties": {
-                    "reason": {
-                        "type": "string",
-                        "description": "Why you are passing instead of attacking.",
-                    }
-                },
-                "required": [],
-            },
-        },
-    ]
+    print(f"Actions taken this turn: {actions_taken}.")
 
     action_name, action_input = _ask_AI_action(
         state_prompt,
         (
             (f"LAST ACTION REJECTED: {last_rejection}\nChoose a different action.\n\n" if last_rejection else "")
             + f"Actions taken this turn so far: {actions_taken}.\n"
-            + (
-                "You have played enough cards. ATTACK NOW if you have sufficient energy, "
-                "or PASS if you cannot attack. Do not play more cards.\n"
-                if actions_taken >= 5
-                else (
-                    "Consider whether attacking or passing is now better than playing another card.\n"
-                    if actions_taken >= 3
-                    else ""
-                )
-            )
-            + "Choose your next action. You can play cards one at a time — "
-            "pick the single best action to take right now."
+            + "Choose your next action.\n"
+            + "IMPORTANT: Before attacking or passing, play ALL beneficial cards from your hand — "
+            "items, supporters, trainers, Pokémon to bench, energy attachment. "
+            "You can take many actions in a single turn. Only attack when ready, and only pass when there is truly nothing left to play. "
+            "You are trying to WIN this game."
         ),
         tools,
     )
