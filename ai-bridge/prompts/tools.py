@@ -4,7 +4,7 @@ def build_action_tools(hand_size):
             "name": "play_card",
             "description": (
                 "Play a card from your hand. Use for trainers, supporters, items, stadiums, "
-                "playing Basic Pokemon to bench, or attaching energy to a Pokemon."
+                "playing Basic Pokemon to bench, attaching energy to a Pokemon, or evolving a Pokemon."
             ),
             "input_schema": {
                 "type": "object",
@@ -18,8 +18,8 @@ def build_action_tools(hand_size):
                         "enum": ["BOARD", "ACTIVE", "BENCH"],
                         "description": (
                             "BOARD: for trainers/supporters/items/stadiums. "
-                            "ACTIVE: to place first Pokemon or attach energy to active. "
-                            "BENCH: to place a Basic Pokemon on bench or attach energy to bench Pokemon."
+                            "ACTIVE: to place first Pokemon, attach energy to active, or evolve the Active Pokemon. "
+                            "BENCH: to place a Basic Pokemon on bench, attach energy to a bench Pokemon, or evolve a bench Pokemon."
                         ),
                     },
                     "bench_index": {
@@ -71,12 +71,39 @@ def build_action_tools(hand_size):
             },
         },
         {
+            "name": "use_ability",
+            "description": (
+                "Activate a once-per-turn Ability on one of your Pokémon. "
+                "Only use for Abilities that say 'Once during your turn' or similar. "
+                "Passive Abilities are always active and do NOT need activation. "
+                "Use abilities BEFORE attaching energy or attacking."
+            ),
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "ability_name": {
+                        "type": "string",
+                        "description": "Exact name of the Ability as shown in the board state.",
+                    },
+                    "target_slot": {
+                        "type": "string",
+                        "enum": ["ACTIVE", "BENCH"],
+                        "description": "Where the Pokémon with the ability is located.",
+                    },
+                    "bench_index": {
+                        "type": "integer",
+                        "description": "Bench slot 0-4. Required when target_slot=BENCH.",
+                    },
+                },
+                "required": ["ability_name", "target_slot"],
+            },
+        },
+        {
             "name": "pass_turn",
             "description": (
                 "End your turn without attacking. Only use this after you have played ALL useful cards "
-                "from your hand (trainers, items, supporters, Pokémon to bench, energy attachment). "
-                "Do NOT pass if there are still cards to play that could be beneficial. "
-                "Do not be afraid to put pokemon on your bench if it helps your position."
+                "from your hand (trainers, items, supporters, Pokémon to bench, energy attachment, abilities). "
+                "Do NOT pass if there are still cards to play or abilities to use that could be beneficial."
             ),
             "input_schema": {
                 "type": "object",
