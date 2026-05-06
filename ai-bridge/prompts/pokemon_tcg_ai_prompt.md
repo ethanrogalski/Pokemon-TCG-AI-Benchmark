@@ -16,9 +16,10 @@ Always track which win condition is most achievable given the current board stat
 
 Each time it is your turn, the AI is called once per action and must return exactly one of these actions:
 
-* `play_card` — play a card from your hand (trainer, supporter, item, stadium, basic Pokémon to bench, or energy attachment). Takes `hand_index` (which card), `target_slot` (BOARD/ACTIVE/BENCH), and optionally `bench_index`.
+* `play_card` — play a card from your hand (trainer, supporter, item, stadium, basic Pokémon to bench, energy attachment, or evolving a Pokémon). Takes `hand_index` (which card), `target_slot` (BOARD/ACTIVE/BENCH), and optionally `bench_index`.
 * `attack` — declare an attack with your active Pokémon. Takes `attack_name` and a required `message` (1–2 sentences of spectator commentary explaining why you chose this attack). This **ends your turn**.
 * `retreat` — switch your active Pokémon to the bench. Takes `bench_index` (which bench Pokémon to bring in). Does NOT end your turn — you can still attack afterward.
+* `use_ability` — activate a once-per-turn Ability on one of your Pokémon. Takes `ability_name` (exact name), `target_slot` (ACTIVE/BENCH), and optionally `bench_index`. Only use for Abilities that say "Once during your turn" — passive Abilities are always active and do not need activation.
 * `pass_turn` — end your turn without attacking. Takes an optional `reason` (sent as spectator chat explaining your plan). Use when you have nothing productive left to do.
 
 You may be called multiple times in a single turn (once per action). Attacking or passing ends the sequence for that turn.
@@ -101,6 +102,7 @@ There is no `get_card_text` tool — card names and attack details are already s
 * **Declare an attack**: Use `attack` with the exact `attack_name`. Only attack if the active Pokémon has the required energy attached. Attacking ends your turn immediately.
 * **Retreat**: Use `retreat` with the `bench_index` of the Pokémon to bring in. Retreating does NOT end your turn — you may still attack afterward.
 * **Evolve**: Use `play_card` with the evolution card's `hand_index` and the target Pokémon's slot. Evolutions cannot be played on Pokémon placed this turn.
+* **Use a once-per-turn Ability**: Use `use_ability` with the exact `ability_name` and the slot where the Pokémon is. Do this before attaching Energy or attacking.
 * **End turn without attacking**: Use `pass_turn` when you have nothing more to do this turn.
 
 When you have finished everything useful this turn and cannot or choose not to attack, use `pass_turn`.
@@ -115,7 +117,8 @@ When you have finished everything useful this turn and cannot or choose not to a
 
 ### Prize Trade Efficiency
 
-* Prefer knockouts that take fewer Prizes for your opponent when they retaliate. Trading a single-Prize Pokémon for a multi-Prize knockout (Pokémon-EX, V, VSTAR, VMAX) is ideal.
+* **Prize values per KO**: Basic and Stage Pokémon give 1 Prize. Pokémon-EX and Mega Pokémon give **2 Prizes**. Always factor this into trade decisions — knocking out an EX is worth twice a normal KO.
+* Prefer knockouts that take fewer Prizes for your opponent when they retaliate. Trading a single-Prize Pokémon for a multi-Prize knockout (Pokémon-EX, Mega) is ideal.
 * Track Prize counts for both players. When ahead on Prizes, play conservatively; when behind, look for efficient trades or big swings.
 
 ### Board Positioning

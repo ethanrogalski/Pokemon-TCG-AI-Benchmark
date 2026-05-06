@@ -14,10 +14,10 @@ Contract:
         "pass_turn"  -> {}
 """
 
-# change two lines below to specific ai agent
 import anthropic
 import json as _json
 import os as _os
+from models import ACTIVE_MODEL
 
 anthropic_client = anthropic.AnthropicBedrock()
 
@@ -34,6 +34,9 @@ CONDITION_NAMES = {
 STAGE_NAMES = {
     2: "Basic", 3: "Stage1", 4: "Stage2",
 }
+
+SUPER_TYPE_NAMES = {1: "Pokemon", 2: "Trainer", 3: "Energy"}
+TRAINER_TYPE_NAMES = {0: "Item", 1: "Supporter", 2: "Stadium", 3: "Tool"}
 
 def _energy_name(code) -> str:
     if isinstance(code, int):
@@ -68,19 +71,11 @@ def _parse_damage(dmg) -> int:
     return 0
 
 
-def _attacker_type_ints(energy_names: list) -> set:
-    result = set()
-    for name in energy_names:
-        nl = name.lower()
-        for type_int, type_str in CARD_TYPE_NAMES.items():
-            ts = type_str.lower()
-            if ts not in ("any", "none", "") and ts in nl:
-                result.add(type_int)
-    return result
-
-
-def _effective_damage(base_dmg: int, attacker_energies: list, defender_info: dict) -> int:
-    attacker_types = _attacker_type_ints(attacker_energies)
+def _effective_damage(base_dmg: int, attacker_info: dict, defender_info: dict) -> int:
+    attacker_types = set(
+        [attacker_info.get("cardType", 9)] +
+        list(attacker_info.get("additionalCardTypes") or [])
+    )
     dmg = base_dmg
     for w in defender_info.get("weakness", []):
         if w.get("type") in attacker_types:
@@ -128,7 +123,7 @@ def compute_tactical_summary(players, my_index, card_names, card_lookup) -> str:
         if len(my_energies) < len(atk.get("cost", [])):
             continue
         base = _parse_damage(atk.get("damage", 0))
-        eff = _effective_damage(base, my_energies, opp_info)
+        eff = _effective_damage(base, my_info, opp_info)
         if eff > best_dmg:
             best_dmg, best_name = eff, atk.get("name", "?")
         if opp_hp_left > 0 and eff >= opp_hp_left:
@@ -145,7 +140,7 @@ def compute_tactical_summary(players, my_index, card_names, card_lookup) -> str:
         if len(opp_energies) < len(atk.get("cost", [])):
             continue
         base = _parse_damage(atk.get("damage", 0))
-        eff = _effective_damage(base, opp_energies, my_info)
+        eff = _effective_damage(base, opp_info, my_info)
         if eff > opp_best_dmg:
             opp_best_dmg, opp_best_name = eff, atk.get("name", "?")
         if my_hp_left > 0 and eff >= my_hp_left:
@@ -221,7 +216,9 @@ def build_state_prompt(players, game_state, my_index, card_names, card_lookup, s
             else:
                 type_str = stage_str
         else:
-            type_str = f"{super_type} {trainer_type}".strip() or "Unknown"
+            trainer_name = TRAINER_TYPE_NAMES.get(trainer_type, "") if isinstance(trainer_type, int) else str(trainer_type)
+            super_name = SUPER_TYPE_NAMES.get(super_type, "") if isinstance(super_type, int) else str(super_type)
+            type_str = trainer_name or super_name or "Unknown"
         card_text = info.get("text", "").replace("\n", " ").strip()
         text_suffix = f" — {card_text}" if card_text and super_type != 1 else ""  # skip text for Pokemon (shown via attacks/abilities)
         hand_lines.append(f"  [{i}] {name} ({type_str}){text_suffix}")
@@ -292,6 +289,9 @@ def build_state_prompt(players, game_state, my_index, card_names, card_lookup, s
         else:
             lines.append("  Attacks: unknown (use your knowledge of this card)")
 
+        lines.append("Be sure to pay close attention to the attack's description. Some attacks have special effects, others may prerequisites for the attack to have an effect.")
+        lines.append("For example, an attack might say 'This attack does 30 damage. If your opponent's Active Pokemon is Paralyzed, this attack does 60 damage instead.' In this case, the attack has a base damage of 30, but if the opponent's Active Pokemon is Paralyzed, the attack does 60 damage. So you should consider both possibilities when deciding whether to use this attack and when trying to predict how much damage it will do.")
+
     if my_active:
         _append_pokemon_lines(lines, my_active, is_mine=True)
     else:
@@ -332,8 +332,8 @@ def build_state_prompt(players, game_state, my_index, card_names, card_lookup, s
             seen.add(name)
             count_str = f" x{name_counts[name]}" if name_counts[name] > 1 else ""
             info = card_lookup.get(name, {})
-            super_type = info.get("superType", "")
-            if super_type == "Pokemon":
+            super_type = info.get("superType")
+            if super_type == 1:  # Pokemon
                 result.append(f"  {name}{count_str} (Pokemon | HP: {info.get('hp', '?')})")
                 for p in info.get("powers", []):
                     result.append(f"    [Ability] {p.get('name', '?')}: {p.get('text', '')}")
@@ -342,10 +342,11 @@ def build_state_prompt(players, game_state, my_index, card_names, card_lookup, s
                     text = a.get("text", "")
                     effect = f" — {text}" if text else ""
                     result.append(f"    {a['name']} [{a.get('damage', '?')} dmg, cost: {cost_str}]{effect}")
-            elif super_type == "Trainer":
-                trainer_type = info.get("trainerType", "")
+            elif super_type == 2:  # Trainer
+                trainer_type = info.get("trainerType")
+                trainer_name = TRAINER_TYPE_NAMES.get(trainer_type, "Trainer") if isinstance(trainer_type, int) else "Trainer"
                 card_text = info.get("text", "")
-                result.append(f"  {name}{count_str} ({trainer_type}){': ' + card_text if card_text else ''}")
+                result.append(f"  {name}{count_str} ({trainer_name}){': ' + card_text if card_text else ''}")
             else:
                 result.append(f"  {name}{count_str}")
         return result
@@ -416,7 +417,7 @@ def build_state_prompt(players, game_state, my_index, card_names, card_lookup, s
 
     restrictions = []
     if turn == 1:
-        restrictions.append("It is Turn 1 — you CANNOT attack this turn.")
+        restrictions.append("It is Turn 1 — you CANNOT attack this turn and you CANNOT play Supporter cards.")
     if supporter_played_this_turn:
         restrictions.append("Supporter already played — do NOT play another Supporter this turn.")
     if energy_attached_this_turn:
@@ -435,7 +436,7 @@ OPP_PLAYER_TYPE = 1
 
 def _ask_claude(state_summary, description, tool):
     resp = anthropic_client.messages.create(
-        model="us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        model=ACTIVE_MODEL,
         max_tokens=512,
         system=SYSTEM_PROMPT,
         tools=[tool],
@@ -449,7 +450,7 @@ def _ask_claude(state_summary, description, tool):
 
 def _ask_claude_action(state_summary, description, tools, max_tokens=1024):
     resp = anthropic_client.messages.create(
-        model="us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        model=ACTIVE_MODEL,
         max_tokens=max_tokens,
         system=SYSTEM_PROMPT,
         tools=tools,
@@ -667,7 +668,15 @@ def get_ai_prompt_response(prompt, players, game_state, my_index, card_names, ca
                 evos_used += 1
             validated.append(j)
 
-        # (code-level energy deduplication removed — rejection message now explains the constraint)
+        # No-mixing rule: server rejects Basic+Evolution mix when maxBasics/maxEvolutions set without maxStage1/maxStage2
+        max_stage1 = opts.get("maxStage1")
+        max_stage2 = opts.get("maxStage2")
+        if (max_basics is not None or max_evolutions is not None) and max_stage1 is None and max_stage2 is None:
+            has_basics = any(_card_kind(eligible[j][2]) == "Basic" for j in validated)
+            has_evos = any(_card_kind(eligible[j][2]) in ("Stage1", "Stage2") for j in validated)
+            if has_basics and has_evos:
+                evo_picks = [j for j in validated if _card_kind(eligible[j][2]) in ("Stage1", "Stage2")]
+                validated = evo_picks  # keep evolutions, drop basics
 
         print(f"[prompt] AI chose eligible indices {ai_indices} → validated {validated} → original indices {[eligible[j][0] for j in validated]}")
         return [eligible[j][0] for j in validated]
@@ -678,21 +687,21 @@ def get_ai_prompt_response(prompt, players, game_state, my_index, card_names, ca
         opp = players[1 - my_index]
         my_type = MY_PLAYER_TYPE
         opp_type = OPP_PLAYER_TYPE
+        def _slot_name(slot):
+            desc = describe_pokemon_slot(slot, card_names, card_lookup)
+            return desc["name"] if desc else "Unknown"
+
         targets = []
         if me.get("active", {}).get("cards"):
-            name = get_card_name(me["active"]["cards"][0], card_names)
-            targets.append({"desc": f"Your Active: {name}", "player": my_type, "slot": 1, "index": 0})
+            targets.append({"desc": f"Your Active: {_slot_name(me['active'])}", "player": my_type, "slot": 1, "index": 0})
         for i, b in enumerate(me.get("bench", [])):
             if b.get("cards"):
-                name = get_card_name(b["cards"][0], card_names)
-                targets.append({"desc": f"Your Bench [{i}]: {name}", "player": my_type, "slot": 2, "index": i})
+                targets.append({"desc": f"Your Bench [{i}]: {_slot_name(b)}", "player": my_type, "slot": 2, "index": i})
         if opp.get("active", {}).get("cards"):
-            name = get_card_name(opp["active"]["cards"][0], card_names)
-            targets.append({"desc": f"Opponent Active: {name}", "player": opp_type, "slot": 1, "index": 0})
+            targets.append({"desc": f"Opponent Active: {_slot_name(opp['active'])}", "player": opp_type, "slot": 1, "index": 0})
         for i, b in enumerate(opp.get("bench", [])):
             if b.get("cards"):
-                name = get_card_name(b["cards"][0], card_names)
-                targets.append({"desc": f"Opponent Bench [{i}]: {name}", "player": opp_type, "slot": 2, "index": i})
+                targets.append({"desc": f"Opponent Bench [{i}]: {_slot_name(b)}", "player": opp_type, "slot": 2, "index": i})
         targets_str = "\n".join(f"  [{i}] {t['desc']}" for i, t in enumerate(targets))
         min_count = opts.get("min", 1)
         max_count = opts.get("max", 1)
@@ -788,67 +797,198 @@ def get_ai_prompt_response(prompt, players, game_state, my_index, card_names, ca
         prizes = players[my_index].get("prizes", [])
         return list(range(len(prizes)))
 
+    # Long ass function that allows AI to put damage counters on benched pokemon
+    # the if 1 means active, if 2 means benched for if you can put counters on active/bench
+    elif ptype == "Put damage":
+        total_damage = prompt.get("damage", 0)
+        max_allowed = prompt.get("maxAllowedDamage", [])
+        target_player_type = prompt.get("playerType", OPP_PLAYER_TYPE)
+        valid_slots = set(prompt.get("slots", [2]))
+        blocked_targets = (prompt.get("options") or {}).get("blocked", [])
+
+        max_by_target = {}
+        for entry in max_allowed:
+            t = entry.get("target", {})
+            key = (t.get("player"), t.get("slot"), t.get("index"))
+            max_by_target[key] = entry.get("damage", total_damage)
+
+        blocked_set = {(b.get("player"), b.get("slot"), b.get("index")) for b in blocked_targets}
+        target_player_state = players[my_index] if target_player_type == MY_PLAYER_TYPE else players[1 - my_index]
+
+        targets = []
+        if 1 in valid_slots and target_player_state.get("active", {}).get("cards"):
+            key = (target_player_type, 1, 0)
+            if key not in blocked_set:
+                max_dmg = max_by_target.get(key, total_damage)
+                slot_info = describe_pokemon_slot(target_player_state["active"], card_names, card_lookup)
+                name = slot_info["name"] if slot_info else "Active"
+                hp_left = max(0, int(slot_info.get("hp") or 0) - target_player_state["active"].get("damage", 0))
+                targets.append({"player": target_player_type, "slot": 1, "index": 0, "max": max_dmg, "name": name, "hp_left": hp_left})
+
+        if 2 in valid_slots:
+            for bi, b in enumerate(target_player_state.get("bench", [])):
+                if b.get("cards"):
+                    key = (target_player_type, 2, bi)
+                    if key not in blocked_set:
+                        max_dmg = max_by_target.get(key, total_damage)
+                        slot_info = describe_pokemon_slot(b, card_names, card_lookup)
+                        name = slot_info["name"] if slot_info else f"Bench {bi}"
+                        hp_left = max(0, int(slot_info.get("hp") or 0) - b.get("damage", 0))
+                        targets.append({"player": target_player_type, "slot": 2, "index": bi, "max": max_dmg, "name": name, "hp_left": hp_left})
+
+        if not targets:
+            return []
+
+        targets_str = "\n".join(
+            f"  [{i}] {t['name']} (max {t['max']} dmg here, {t['hp_left']} HP remaining)"
+            for i, t in enumerate(targets)
+        )
+        result = _ask_AI(
+            state_summary,
+            f"{message}\nDistribute exactly {total_damage} damage across:\n{targets_str}\n"
+            f"Prioritize targets you can KO. Return damage_amounts (0 = skip target). Must sum to {total_damage}.",
+            {
+                "name": "put_damage",
+                "description": f"Distribute {total_damage} damage across {len(targets)} target(s).",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "damage_amounts": {
+                            "type": "array",
+                            "items": {"type": "integer"},
+                            "description": f"One value per target [0..{len(targets)-1}]. Sum must equal {total_damage}. Each value <= target's max.",
+                        }
+                    },
+                    "required": ["damage_amounts"],
+                },
+            },
+        )
+
+        amounts = list(result.get("damage_amounts", [])) if result else []
+        amounts = (amounts + [0] * len(targets))[:len(targets)]
+        for i in range(len(amounts)):
+            amounts[i] = max(0, min(amounts[i], targets[i]["max"]))
+
+        # Change damage so it sums to total_damage in case AI does bad math
+        # Adds/removes damage from targets (in listed order) until diff is 0
+        diff = total_damage - sum(amounts)
+        if diff != 0:
+            for i in range(len(targets)):
+                room = targets[i]["max"] - amounts[i]
+                adj = max(-amounts[i], min(diff, room))
+                amounts[i] += adj
+                diff -= adj
+                if diff == 0:
+                    break
+
+        return [
+            {"target": {"player": t["player"], "slot": t["slot"], "index": t["index"]}, "damage": amounts[i]}
+            for i, t in enumerate(targets)
+            if amounts[i] > 0
+        ]
+
     elif ptype == "Attach energy":
-        energy_data = prompt.get("energy", [])
+        # cardList is the TypeScript property name — serializes to prompt["cardList"]["cards"]
+        card_list_cards = prompt.get("cardList", {}).get("cards", [])
+        opts = prompt.get("options", {})
+        blocked = set(opts.get("blocked", []))
+        attach_max = opts.get("max", 1)
+        attach_min = opts.get("min", 0)
+
+        # Find indices of actual energy cards in the cardList that are not blocked.
+        # prompt["cardList"]["cards"] contains full Card objects (dicts), not integer IDs.
+        valid_energy_indices = []
+        energy_names_by_idx = {}
+        for i, c in enumerate(card_list_cards):
+            if i in blocked:
+                continue
+            if isinstance(c, dict):
+                # Full card object — check superType directly
+                is_energy = c.get("superType") == 3
+                cname = c.get("fullName") or c.get("name", "")
+            elif isinstance(c, int) and c < len(card_names):
+                cname = card_names[c]
+                cinfo = card_lookup.get(cname, {})
+                is_energy = cinfo.get("superType") == 3
+            else:
+                continue
+            if is_energy:
+                valid_energy_indices.append(i)
+                energy_names_by_idx[i] = cname
+
+        # If no valid energy found, send empty list (valid when min=0) or [0] as last resort
+        if not valid_energy_indices:
+            return [] if attach_min == 0 else [{"to": {"player": MY_PLAYER_TYPE, "slot": 2, "index": 0}, "index": 0}]
+
+        # Only attach up to what the prompt allows
+        energies_to_attach = valid_energy_indices[:attach_max]
+
         me = players[my_index]
 
         targets = []
         if me.get("active", {}).get("cards"):
-            name = get_card_name(me["active"]["cards"][0], card_names)
             slot_info = describe_pokemon_slot(me.get("active"), card_names, card_lookup)
+            name = slot_info["name"] if slot_info else get_card_name(me["active"]["cards"][0], card_names)
             info = card_lookup.get(name, {})
             min_cost = min((len(a.get("cost", [])) for a in info.get("attacks", [])), default=99)
             cur_e = len(slot_info["energies"]) if slot_info else 0
             targets.append({"desc": f"Your Active: {name} ({cur_e} energy, cheapest attack needs {min_cost})", "player": MY_PLAYER_TYPE, "slot": 1, "index": 0})
         for bi, b in enumerate(me.get("bench", [])):
             if b.get("cards"):
-                name = get_card_name(b["cards"][0], card_names)
                 slot_info = describe_pokemon_slot(b, card_names, card_lookup)
+                name = slot_info["name"] if slot_info else get_card_name(b["cards"][0], card_names)
                 info = card_lookup.get(name, {})
                 min_cost = min((len(a.get("cost", [])) for a in info.get("attacks", [])), default=99)
                 cur_e = len(slot_info["energies"]) if slot_info else 0
                 targets.append({"desc": f"Your Bench [{bi}]: {name} ({cur_e} energy, cheapest attack needs {min_cost})", "player": MY_PLAYER_TYPE, "slot": 2, "index": bi})
 
         if not targets:
-            return [{"to": {"player": MY_PLAYER_TYPE, "slot": 1, "index": 0}, "index": 0}]
-        if len(targets) == 1:
-            t = targets[0]
-            return [{"to": {"player": t["player"], "slot": t["slot"], "index": t["index"]}, "index": 0}]
+            return [{"to": {"player": MY_PLAYER_TYPE, "slot": 1, "index": 0}, "index": ei} for ei in energies_to_attach]
 
-        energy_names = [get_card_name(e.get("card", 0), card_names) for e in energy_data]
-        energy_str = ", ".join(f"[{i}] {n}" for i, n in enumerate(energy_names)) or "unknown"
+        energy_str = ", ".join(f"[{i}] {energy_names_by_idx[i]}" for i in energies_to_attach)
         targets_str = "\n".join(f"  [{i}] {t['desc']}" for i, t in enumerate(targets))
+        n = len(energies_to_attach)
 
         result = _ask_AI(
             state_summary,
-            f"{message}\nEnergy available: {energy_str}\nPokemon you can attach to:\n{targets_str}\nChoose which Pokemon to power up based on your win plan.",
+            f"{message}\nYou must assign {n} energ{'y' if n==1 else 'ies'} to Pokemon.\n"
+            f"Energy cards to assign (cardList indices): {energy_str}\n"
+            f"Pokemon you can attach to:\n{targets_str}\n"
+            f"Return a target_index for each energy in order. Distribute strategically based on your win plan.",
             {
                 "name": "attach_energy",
-                "description": "Choose which Pokemon to attach energy to.",
+                "description": f"Assign {n} energ{'y' if n==1 else 'ies'} to Pokemon targets.",
                 "input_schema": {
                     "type": "object",
                     "properties": {
-                        "target_index": {"type": "integer", "description": f"Index of target Pokemon (0 to {len(targets)-1})"},
-                        "energy_index": {"type": "integer", "description": f"Index of energy to attach (0 to {max(0, len(energy_data)-1)})"},
+                        "assignments": {
+                            "type": "array",
+                            "description": f"List of {n} target indices (0 to {len(targets)-1}), one per energy in order.",
+                            "items": {"type": "integer"},
+                            "minItems": n,
+                            "maxItems": n,
+                        },
                     },
-                    "required": ["target_index"],
+                    "required": ["assignments"],
                 },
             },
         )
-        ti = max(0, min((result.get("target_index", 0) if result else 0), len(targets) - 1))
-        ei = max(0, min((result.get("energy_index", 0) if result else 0), max(0, len(energy_data) - 1)))
-        t = targets[ti]
-        return [{"to": {"player": t["player"], "slot": t["slot"], "index": t["index"]}, "index": ei}]
+
+        raw_assignments = (result.get("assignments") or []) if result else []
+        # Pad/trim to exactly the number of energies, clamp each to valid target range
+        assignments_out = []
+        for idx, ei in enumerate(energies_to_attach):
+            ti = raw_assignments[idx] if idx < len(raw_assignments) else 0
+            ti = max(0, min(ti, len(targets) - 1))
+            t = targets[ti]
+            assignments_out.append({"to": {"player": t["player"], "slot": t["slot"], "index": t["index"]}, "index": ei})
+        return assignments_out
 
     print(f"[prompt] Unknown type '{ptype}', returning None")
     return None
 
 
-<<<<<<< HEAD
-def get_ai_action(players, game_state, my_index, card_names, card_lookup, actions_taken=0, last_rejection=None, chat_sent_this_turn=False, supporter_played_this_turn=False, energy_attached_this_turn=False, turn_plan_text=None):
-=======
-def get_ai_action(players, game_state, my_index, card_names, card_lookup, actions_taken=0, last_rejection=None, supporter_played_this_turn=False, energy_attached_this_turn=False):
->>>>>>> origin/main
+def get_ai_action(players, game_state, my_index, card_names, card_lookup, actions_taken=0, last_rejection=None, chat_sent_this_turn=False, supporter_played_this_turn=False, energy_attached_this_turn=False, turn_plan_text=None, rejected_this_turn=None):
     state_prompt = build_state_prompt(
         players, game_state, my_index, card_names, card_lookup,
         supporter_played_this_turn=supporter_played_this_turn,
@@ -864,7 +1004,10 @@ def get_ai_action(players, game_state, my_index, card_names, card_lookup, action
     prompt_parts = []
     if turn_plan_text:
         prompt_parts.append(turn_plan_text)
-    if last_rejection:
+    if rejected_this_turn:
+        rejected_str = "\n".join(f"  - {r}" for r in rejected_this_turn)
+        prompt_parts.append(f"REJECTED THIS TURN — do NOT attempt any of these again:\n{rejected_str}")
+    elif last_rejection:
         prompt_parts.append(f"LAST ACTION REJECTED: {last_rejection}\nChoose a different action.")
     prompt_parts.append(
         f"Actions taken this turn so far: {actions_taken}.\n"
