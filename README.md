@@ -6,8 +6,9 @@ Built on twinleaf.gg, a full rules engine for the Pokemon TCG. LLMs interact via
 
 -----
 
-# Technical Arcitecture
+# Technical Architecture
 
+!(Diagram.png "Project Technical Architecture Diagram)
 -----
 
 # twinleaf.gg
