@@ -193,7 +193,9 @@ def _emit_sync(event_name, data, timeout=10):
         done.set()
 
     sio.emit(event_name, data, callback=ack)
-    done.wait(timeout=timeout)
+    if not done.wait(timeout=timeout):
+        print(f"[emit_sync] TIMEOUT waiting for ack on {event_name}")
+        return {"message": "error", "data": "TIMEOUT"}
     return result[0]
 
 
@@ -251,7 +253,7 @@ def _take_action(players, game_state, my_index, card_names):
             return "retry"
 
         actions_this_turn += 1
-        rejected_this_turn = []
+        rejected_this_turn = ["This is a list of actions you have tried to take that have been rejected. Do not try to play these actions again. This list will clear once you perform an action that is valid and accepted by the server."]
         if _is_supporter:
             supporter_played_this_turn = True
         if _is_energy:
@@ -281,7 +283,7 @@ def _take_action(players, game_state, my_index, card_names):
             return "retry"
 
         actions_this_turn += 1
-        rejected_this_turn = []
+        rejected_this_turn = ["This is a list of actions you have tried to take that have been rejected. Do not try to play these actions again. This list will clear once you perform an action that is valid and accepted by the server."]
         print(f"[action] attack {attack_name!r} accepted")
         return "done"
 
@@ -302,7 +304,7 @@ def _take_action(players, game_state, my_index, card_names):
             return "retry"
 
         actions_this_turn += 1
-        rejected_this_turn = []
+        rejected_this_turn = ["This is a list of actions you have tried to take that have been rejected. Do not try to play these actions again. This list will clear once you perform an action that is valid and accepted by the server."]
         attack_committed = False
         print(f"[action] retreat to bench={bench_index} accepted")
         return "wait"
@@ -328,7 +330,7 @@ def _take_action(players, game_state, my_index, card_names):
             return "retry"
 
         actions_this_turn += 1
-        rejected_this_turn = []
+        rejected_this_turn = ["This is a list of actions you have tried to take that have been rejected. Do not try to play these actions again. This list will clear once you perform an action that is valid and accepted by the server."]
         print(f"[action] use_ability {ability_name!r} accepted")
         return "wait"
 
@@ -463,7 +465,7 @@ def on_state_change(data):
             supporter_played_this_turn = False
             energy_attached_this_turn = False
             last_rejection = None
-            rejected_this_turn = []
+            rejected_this_turn = ["This is a list of actions you have tried to take that have been rejected. Do not try to play these actions again. This list will clear once you perform an action that is valid and accepted by the server."]
             _waiting_for_prompt_ack = False
             prompt_fail_count = 0
             last_turn_number = turn

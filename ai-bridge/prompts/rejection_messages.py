@@ -6,9 +6,6 @@ REJECTION_MESSAGES = {
     "PROMPT_INVALID_RESULT": (
         "Your selection was invalid. Check the eligible indices and constraints carefully."
     ),
-    "SUPPORTER_ALREADY_PLAYED": (
-        "You already played a Supporter this turn. Do not play another Supporter card."
-    ),
     "CANNOT_ATTACK_ON_FIRST_TURN": (
         "You cannot attack on the very first turn of the game. Pass your turn instead."
     ),
@@ -55,7 +52,7 @@ REJECTION_MESSAGES = {
         "That Stadium is already in play. You cannot play a duplicate of the current Stadium."
     ),
     "SUPPORTER_ALREADY_PLAYED": (
-        "You already played a Supporter this turn. You may only play one Supporter per turn. "
+        "You already played a Supporter this turn. You may only play one Supporter per turn. You cannot play another supporter card."
         "Also, you cannot play any Supporter on your very first turn of the game."
     ),
     "INVALID_PROMPT_RESULT": (

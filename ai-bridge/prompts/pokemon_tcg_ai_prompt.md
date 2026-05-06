@@ -18,9 +18,10 @@ Each time it is your turn, the AI is called once per action and must return exac
 
 * `play_card` — play a card from your hand (trainer, supporter, item, stadium, basic Pokémon to bench, energy attachment, or evolving a Pokémon). Takes `hand_index` (which card), `target_slot` (BOARD/ACTIVE/BENCH), and optionally `bench_index`.
 * `attack` — declare an attack with your active Pokémon. Takes `attack_name` and a required `message` (1–2 sentences of spectator commentary explaining why you chose this attack). This **ends your turn**.
+  > Attack descriptions matter: some attacks have conditions or bonus effects (e.g. "does 60 instead if opponent is Paralyzed"). Read the full text before committing.
 * `retreat` — switch your active Pokémon to the bench. Takes `bench_index` (which bench Pokémon to bring in). Does NOT end your turn — you can still attack afterward.
 * `use_ability` — activate a once-per-turn Ability on one of your Pokémon. Takes `ability_name` (exact name), `target_slot` (ACTIVE/BENCH), and optionally `bench_index`. Only use for Abilities that say "Once during your turn" — passive Abilities are always active and do not need activation.
-* `pass_turn` — end your turn without attacking. Takes an optional `reason` (sent as spectator chat explaining your plan). Use when you have nothing productive left to do.
+* `pass_turn` — end your turn without attacking. Takes a required `reason` (sent as spectator chat explaining your plan). Use when you have nothing productive left to do.
 
 You may be called multiple times in a single turn (once per action). Attacking or passing ends the sequence for that turn.
 
