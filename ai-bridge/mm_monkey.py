@@ -8,6 +8,27 @@ two AI bots play each other.
 Defaults to monkey1/monkey1, deck id 8 (however this only selects the one deck for monkey. Deck ids are unique to each deck).
 Invalid deck id just defaults to first deck in user's collection. Format default is 1 (standard).
 
+TO MAKE 2 AI PLAY AGAINST EACH OTHER THEN YOU WATCH (with dragapult vs dragapult):
+    create two terminals
+    in terminal 1 run:
+        cd ptcg-server
+        npm run start
+    in terminal 2 run:
+        cd ptcg-play
+        npm run start:local
+    
+    Open localhost:4200
+    Create own account/log into Twinleaf
+
+    create two terminals
+    in terminal 1 run: python mm_monkey.py -u monkey1 -p monkey1 -d 11
+    in terminal 2 run: python mm_monkey.py -u monkey2 -p monkey2 -d 12
+
+    On Twinleaf, click spectate and join the game (it'll say join).
+    Then, a new option will appear in the nav bar "Tables". Click tables and click on the first game.
+    You are now spectating the two ais.
+
+
 Usage:
     python mm_monkey.py -u monkey1 -p monkey1
     python mm_monkey.py -u monkey2 -p monkey2 -d 9 --format 1
