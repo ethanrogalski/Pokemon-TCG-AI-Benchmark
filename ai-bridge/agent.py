@@ -59,6 +59,106 @@ def get_card_name(card_id, card_names):
     return "Unknown"
 
 
+def _parse_damage(dmg) -> int:
+    if isinstance(dmg, int):
+        return dmg
+    if isinstance(dmg, str):
+        digits = ''.join(c for c in dmg if c.isdigit())
+        return int(digits) if digits else 0
+    return 0
+
+
+def _attacker_type_ints(energy_names: list) -> set:
+    result = set()
+    for name in energy_names:
+        nl = name.lower()
+        for type_int, type_str in CARD_TYPE_NAMES.items():
+            ts = type_str.lower()
+            if ts not in ("any", "none", "") and ts in nl:
+                result.add(type_int)
+    return result
+
+
+def _effective_damage(base_dmg: int, attacker_energies: list, defender_info: dict) -> int:
+    attacker_types = _attacker_type_ints(attacker_energies)
+    dmg = base_dmg
+    for w in defender_info.get("weakness", []):
+        if w.get("type") in attacker_types:
+            multiplier = w.get("value")
+            dmg = dmg * (multiplier if multiplier is not None else 2)
+            break
+    for r in defender_info.get("resistance", []):
+        if r.get("type") in attacker_types:
+            dmg = max(0, dmg + r.get("value", -30))
+            break
+    return int(dmg)
+
+
+def compute_tactical_summary(players, my_index, card_names, card_lookup) -> str:
+    me = players[my_index]
+    opp = players[1 - my_index]
+    my_slot = me.get("active", {})
+    opp_slot = opp.get("active", {})
+    if not my_slot.get("cards") or not opp_slot.get("cards"):
+        return ""
+
+    my_name = get_card_name(my_slot["cards"][0], card_names)
+    opp_name = get_card_name(opp_slot["cards"][0], card_names)
+    my_info = card_lookup.get(my_name, {})
+    opp_info = card_lookup.get(opp_name, {})
+
+    def _slot_energies(slot):
+        ef = slot.get("energies")
+        ids = ef.get("cards", []) if isinstance(ef, dict) else []
+        return [get_card_name(e, card_names) for e in ids]
+
+    my_energies = _slot_energies(my_slot)
+    opp_energies = _slot_energies(opp_slot)
+
+    opp_hp = opp_info.get("hp", 0)
+    opp_hp_left = max(0, (opp_hp if isinstance(opp_hp, int) else 0) - opp_slot.get("damage", 0))
+    my_hp = my_info.get("hp", 0)
+    my_hp_left = max(0, (my_hp if isinstance(my_hp, int) else 0) - my_slot.get("damage", 0))
+
+    lines = []
+
+    # My attacks vs opponent
+    ko_attacks, best_dmg, best_name = [], 0, None
+    for atk in my_info.get("attacks", []):
+        if len(my_energies) < len(atk.get("cost", [])):
+            continue
+        base = _parse_damage(atk.get("damage", 0))
+        eff = _effective_damage(base, my_energies, opp_info)
+        if eff > best_dmg:
+            best_dmg, best_name = eff, atk.get("name", "?")
+        if opp_hp_left > 0 and eff >= opp_hp_left:
+            note = " (weakness)" if eff > base else ""
+            ko_attacks.append(f"{atk.get('name', '?')} ({eff} dmg{note})")
+    if ko_attacks:
+        lines.append(f"*** KO AVAILABLE: Knock out {opp_name} ({opp_hp_left} HP left) with: {'; '.join(ko_attacks)} ***")
+    elif best_name and opp_hp_left > 0:
+        lines.append(f"Best attack vs {opp_name}: {best_name} ({best_dmg} dmg) — need {opp_hp_left - best_dmg} more to KO")
+
+    # Opponent threats vs my active
+    opp_ko, opp_best_dmg, opp_best_name = [], 0, None
+    for atk in opp_info.get("attacks", []):
+        if len(opp_energies) < len(atk.get("cost", [])):
+            continue
+        base = _parse_damage(atk.get("damage", 0))
+        eff = _effective_damage(base, opp_energies, my_info)
+        if eff > opp_best_dmg:
+            opp_best_dmg, opp_best_name = eff, atk.get("name", "?")
+        if my_hp_left > 0 and eff >= my_hp_left:
+            note = " (weakness)" if eff > base else ""
+            opp_ko.append(f"{atk.get('name', '?')} ({eff} dmg{note})")
+    if opp_ko:
+        lines.append(f"*** DANGER: Opponent can KO your {my_name} ({my_hp_left} HP left) with: {'; '.join(opp_ko)} — consider retreating ***")
+    elif opp_best_name and my_hp_left > 0:
+        lines.append(f"Opponent's best attack vs your {my_name}: {opp_best_name} ({opp_best_dmg} dmg), you have {my_hp_left} HP left")
+
+    return "\nTACTICAL SUMMARY:\n" + "\n".join(f"  {l}" for l in lines) if lines else ""
+
+
 def describe_pokemon_slot(poke_list, card_names, card_lookup):
     if not poke_list or not poke_list.get("cards"):
         return None
@@ -310,6 +410,10 @@ def build_state_prompt(players, game_state, my_index, card_names, card_lookup, s
     if chat_lines:
         lines += ["\nRECENT CHAT:"] + chat_lines
 
+    tactical = compute_tactical_summary(players, my_index, card_names, card_lookup)
+    if tactical:
+        lines.append(tactical)
+
     restrictions = []
     if turn == 1:
         restrictions.append("It is Turn 1 — you CANNOT attack this turn.")
@@ -363,6 +467,57 @@ def _ask_AI(state_summary, description, tool):
 
 def _ask_AI_action(state_summary, description, tools, max_tokens=1024):
     return _ask_claude_action(state_summary, description, tools, max_tokens)
+
+
+def generate_turn_plan(state_prompt: str) -> str | None:
+    """Generate a strategic plan for the full turn. Called once at turn start."""
+    result = _ask_AI(
+        state_prompt,
+        (
+            "TURN PLANNING: Before taking any actions, plan your entire turn. "
+            "Think through: (1) play draw/search effects first for more information, "
+            "(2) evolve Pokemon before attaching energy or attacking, "
+            "(3) choose the best energy attachment target based on your win condition, "
+            "(4) whether you can KO the opponent this turn (check TACTICAL SUMMARY), "
+            "(5) whether you're in danger of being KO'd and should retreat. "
+            "Output a concise ordered action plan."
+        ),
+        {
+            "name": "turn_plan",
+            "description": "Your strategic plan for this turn.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "situation": {
+                        "type": "string",
+                        "description": "1-2 sentences: board assessment, who's ahead, immediate threats and opportunities",
+                    },
+                    "steps": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": (
+                            "Ordered list of concrete actions for this turn. "
+                            "E.g. ['Play Professor's Research to draw 7', "
+                            "'Play Rare Candy to evolve bench Charmander into Charizard ex', "
+                            "'Attach Fire Energy to Charizard ex', "
+                            "'Attack with Burning Darkness for the KO']"
+                        ),
+                    },
+                },
+                "required": ["situation", "steps"],
+            },
+        },
+    )
+    if not result or not result.get("steps"):
+        return None
+    situation = result.get("situation", "")
+    steps = result.get("steps", [])
+    lines = ["=== TURN PLAN (follow this sequence, adjust if a step is unavailable) ==="]
+    if situation:
+        lines.append(f"Situation: {situation}")
+    lines += [f"  {i + 1}. {s}" for i, s in enumerate(steps)]
+    lines.append("=== END PLAN ===")
+    return "\n".join(lines)
 
 # Many prompt types
 # Show mulligan, show cards, select, selectOption, confirm cards, choose cards, choose pokemon
@@ -634,15 +789,66 @@ def get_ai_prompt_response(prompt, players, game_state, my_index, card_names, ca
         return list(range(len(prizes)))
 
     elif ptype == "Attach energy":
-        active = players[my_index].get("active", {})
-        slot = 1 if active.get("cards") else 2
-        return [{"to": {"player": MY_PLAYER_TYPE, "slot": slot, "index": 0}, "index": 0}]
+        energy_data = prompt.get("energy", [])
+        me = players[my_index]
+
+        targets = []
+        if me.get("active", {}).get("cards"):
+            name = get_card_name(me["active"]["cards"][0], card_names)
+            slot_info = describe_pokemon_slot(me.get("active"), card_names, card_lookup)
+            info = card_lookup.get(name, {})
+            min_cost = min((len(a.get("cost", [])) for a in info.get("attacks", [])), default=99)
+            cur_e = len(slot_info["energies"]) if slot_info else 0
+            targets.append({"desc": f"Your Active: {name} ({cur_e} energy, cheapest attack needs {min_cost})", "player": MY_PLAYER_TYPE, "slot": 1, "index": 0})
+        for bi, b in enumerate(me.get("bench", [])):
+            if b.get("cards"):
+                name = get_card_name(b["cards"][0], card_names)
+                slot_info = describe_pokemon_slot(b, card_names, card_lookup)
+                info = card_lookup.get(name, {})
+                min_cost = min((len(a.get("cost", [])) for a in info.get("attacks", [])), default=99)
+                cur_e = len(slot_info["energies"]) if slot_info else 0
+                targets.append({"desc": f"Your Bench [{bi}]: {name} ({cur_e} energy, cheapest attack needs {min_cost})", "player": MY_PLAYER_TYPE, "slot": 2, "index": bi})
+
+        if not targets:
+            return [{"to": {"player": MY_PLAYER_TYPE, "slot": 1, "index": 0}, "index": 0}]
+        if len(targets) == 1:
+            t = targets[0]
+            return [{"to": {"player": t["player"], "slot": t["slot"], "index": t["index"]}, "index": 0}]
+
+        energy_names = [get_card_name(e.get("card", 0), card_names) for e in energy_data]
+        energy_str = ", ".join(f"[{i}] {n}" for i, n in enumerate(energy_names)) or "unknown"
+        targets_str = "\n".join(f"  [{i}] {t['desc']}" for i, t in enumerate(targets))
+
+        result = _ask_AI(
+            state_summary,
+            f"{message}\nEnergy available: {energy_str}\nPokemon you can attach to:\n{targets_str}\nChoose which Pokemon to power up based on your win plan.",
+            {
+                "name": "attach_energy",
+                "description": "Choose which Pokemon to attach energy to.",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "target_index": {"type": "integer", "description": f"Index of target Pokemon (0 to {len(targets)-1})"},
+                        "energy_index": {"type": "integer", "description": f"Index of energy to attach (0 to {max(0, len(energy_data)-1)})"},
+                    },
+                    "required": ["target_index"],
+                },
+            },
+        )
+        ti = max(0, min((result.get("target_index", 0) if result else 0), len(targets) - 1))
+        ei = max(0, min((result.get("energy_index", 0) if result else 0), max(0, len(energy_data) - 1)))
+        t = targets[ti]
+        return [{"to": {"player": t["player"], "slot": t["slot"], "index": t["index"]}, "index": ei}]
 
     print(f"[prompt] Unknown type '{ptype}', returning None")
     return None
 
 
+<<<<<<< HEAD
+def get_ai_action(players, game_state, my_index, card_names, card_lookup, actions_taken=0, last_rejection=None, chat_sent_this_turn=False, supporter_played_this_turn=False, energy_attached_this_turn=False, turn_plan_text=None):
+=======
 def get_ai_action(players, game_state, my_index, card_names, card_lookup, actions_taken=0, last_rejection=None, supporter_played_this_turn=False, energy_attached_this_turn=False):
+>>>>>>> origin/main
     state_prompt = build_state_prompt(
         players, game_state, my_index, card_names, card_lookup,
         supporter_played_this_turn=supporter_played_this_turn,
@@ -655,17 +861,23 @@ def get_ai_action(players, game_state, my_index, card_names, card_lookup, action
 
     print(f"Actions taken this turn: {actions_taken}.")
 
+    prompt_parts = []
+    if turn_plan_text:
+        prompt_parts.append(turn_plan_text)
+    if last_rejection:
+        prompt_parts.append(f"LAST ACTION REJECTED: {last_rejection}\nChoose a different action.")
+    prompt_parts.append(
+        f"Actions taken this turn so far: {actions_taken}.\n"
+        "Choose your next action.\n"
+        "IMPORTANT: Before attacking or passing, play ALL beneficial cards from your hand — "
+        "items, supporters, trainers, Pokémon to bench, energy attachment. "
+        "You can take many actions in a single turn. Only attack when ready, and only pass when there is truly nothing left to play. "
+        "You are trying to WIN this game."
+    )
+
     action_name, action_input = _ask_AI_action(
         state_prompt,
-        (
-            (f"LAST ACTION REJECTED: {last_rejection}\nChoose a different action.\n\n" if last_rejection else "")
-            + f"Actions taken this turn so far: {actions_taken}.\n"
-            + "Choose your next action.\n"
-            + "IMPORTANT: Before attacking or passing, play ALL beneficial cards from your hand — "
-            "items, supporters, trainers, Pokémon to bench, energy attachment. "
-            "You can take many actions in a single turn. Only attack when ready, and only pass when there is truly nothing left to play. "
-            "You are trying to WIN this game."
-        ),
+        "\n\n".join(prompt_parts),
         tools,
     )
     print(f"AI chose: {action_name} {action_input}")

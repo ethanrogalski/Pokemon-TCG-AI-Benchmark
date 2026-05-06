@@ -10,7 +10,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from agent import get_ai_action, get_ai_prompt_response  # swap this import to change AI providers
+from agent import get_ai_action, get_ai_prompt_response, generate_turn_plan, build_state_prompt  # swap this import to change AI providers
 
 SERVER_URL = os.environ.get("SERVER_URL", "http://localhost:8080")
 USERNAME = os.environ.get("BOT_USERNAME", "monkey")
@@ -69,6 +69,7 @@ supporter_played_this_turn = False
 energy_attached_this_turn = False
 last_sent_prompt_id = None
 last_rejection = None
+_current_turn_plan = None
 last_prompt_rejection = None
 last_rejected_prompt_id = None
 _current_context = None
@@ -125,9 +126,7 @@ def _emit_sync(event_name, data, timeout=10):
 def _take_action(players, game_state, my_index, card_names):
     """Emit one action, wait for ack, return 'done' / 'wait' / 'retry'."""
     global actions_this_turn, turn_passed, attack_committed, chat_sent_this_turn
-    global supporter_played_this_turn, energy_attached_this_turn, last_rejection
-
-    if attack_committed or turn_passed:
+    global supporter_played_this_turn, energy_attached_this_turn, last_rejection, _current_turn_plan    if attack_committed or turn_passed:
         return "done"
 
     if _waiting_for_prompt_ack:
@@ -139,11 +138,22 @@ def _take_action(players, game_state, my_index, card_names):
         sio.emit("game:action:passTurn", {"gameId": GAME_ID})
         return "done"
 
+    if actions_this_turn == 0 and _current_turn_plan is None:
+        state_for_plan = build_state_prompt(
+            players, game_state, my_index, card_names, card_lookup,
+            supporter_played_this_turn=supporter_played_this_turn,
+            energy_attached_this_turn=energy_attached_this_turn,
+        )
+        _current_turn_plan = generate_turn_plan(state_for_plan)
+        if _current_turn_plan:
+            print(f"[plan]\n{_current_turn_plan}")
+
     action_name, action_input = get_ai_action(
         players, game_state, my_index, card_names, card_lookup, actions_this_turn,
         last_rejection=last_rejection,
         supporter_played_this_turn=supporter_played_this_turn,
         energy_attached_this_turn=energy_attached_this_turn,
+        turn_plan_text=_current_turn_plan,
     )
     last_rejection = None
 
@@ -253,11 +263,9 @@ def _take_action(players, game_state, my_index, card_names):
 
 def on_state_change(data):
     if not _state_lock.acquire(blocking=False):
-        return  # another thread is already processing a stateChange — drop this one
+        return
 
-    global actions_this_turn, last_turn_number, turn_passed, attack_committed, chat_sent_this_turn, supporter_played_this_turn, energy_attached_this_turn, last_sent_prompt_id, last_rejection, last_prompt_rejection, last_rejected_prompt_id, _current_context, _waiting_for_prompt_ack, prompt_fail_count
-
-    try:
+    global actions_this_turn, last_turn_number, turn_passed, attack_committed, chat_sent_this_turn, supporter_played_this_turn, energy_attached_this_turn, last_sent_prompt_id, last_rejection, _current_turn_plan, last_prompt_rejection, last_rejected_prompt_id, _current_context, _waiting_for_prompt_ack, prompt_fail_count    try:
         raw_state = base64.b64decode(data["stateData"]).decode("utf-8")
         parsed = json.loads(raw_state)
         players = parsed[0]
@@ -346,6 +354,7 @@ def on_state_change(data):
             supporter_played_this_turn = False
             energy_attached_this_turn = False
             last_rejection = None
+            _current_turn_plan = None
             _waiting_for_prompt_ack = False
             prompt_fail_count = 0
             last_turn_number = turn
