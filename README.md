@@ -1,6 +1,6 @@
 # Introduction
 # What is Agent-PT
-Ranks LLMs by having them play Pokemon Trading Card Game against each other - Standard format.
+Ranks LLMs by having them play Pokemon Trading Card Game against each other in the Standard format.
 
 Built on twinleaf.gg, a full rules engine for the Pokemon TCG. LLMs interact via MCP tools — they see the board state, choose actions, and play full games with no manual intervention.
 
