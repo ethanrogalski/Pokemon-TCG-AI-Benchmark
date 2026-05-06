@@ -216,7 +216,7 @@ def build_state_prompt(players, game_state, my_index, card_names, card_lookup, s
             else:
                 type_str = stage_str
         else:
-            trainer_name = TRAINER_TYPE_NAMES.get(trainer_type, "") if isinstance(trainer_type, int) else str(trainer_type)
+            trainer_name = TRAINER_TYPE_NAMES.get(trainer_type, "") if isinstance(trainer_type, int) else ""
             super_name = SUPER_TYPE_NAMES.get(super_type, "") if isinstance(super_type, int) else str(super_type)
             type_str = trainer_name or super_name or "Unknown"
         card_text = info.get("text", "").replace("\n", " ").strip()
@@ -225,9 +225,10 @@ def build_state_prompt(players, game_state, my_index, card_names, card_lookup, s
 
     my_active = describe_pokemon_slot(me.get("active"), card_names, card_lookup)
     my_bench = [
-        describe_pokemon_slot(b, card_names, card_lookup) for b in me.get("bench", [])
+        (i, describe_pokemon_slot(b, card_names, card_lookup))
+        for i, b in enumerate(me.get("bench", []))
     ]
-    my_bench = [b for b in my_bench if b]
+    my_bench = [(i, b) for i, b in my_bench if b]
 
     opp_active = describe_pokemon_slot(opp.get("active"), card_names, card_lookup)
     opp_bench = [
@@ -247,7 +248,7 @@ def build_state_prompt(players, game_state, my_index, card_names, card_lookup, s
 
     def _fmt_attack_mine(a, attached_count):
         cost = a.get("cost", [])
-        cost_str = '+'.join(_energy_name(c) for c in cost)
+        cost_str = '+'.join(_energy_name(c) for c in cost) or "none"
         needed = len(cost)
         usable = "CAN USE" if attached_count >= needed else f"CANNOT USE (need {needed} energy, have {attached_count})"
         text = a.get("text", "")
@@ -256,7 +257,7 @@ def build_state_prompt(players, game_state, my_index, card_names, card_lookup, s
 
     def _fmt_attack_opp(a):
         cost = a.get("cost", [])
-        cost_str = '+'.join(_energy_name(c) for c in cost)
+        cost_str = '+'.join(_energy_name(c) for c in cost) or "none"
         text = a.get("text", "")
         effect = f" — {text}" if text else ""
         return f"    {a['name']} [{a.get('damage', '?')} dmg, cost: {cost_str}]{effect}"
@@ -289,8 +290,6 @@ def build_state_prompt(players, game_state, my_index, card_names, card_lookup, s
         else:
             lines.append("  Attacks: unknown (use your knowledge of this card)")
 
-        lines.append("Be sure to pay close attention to the attack's description. Some attacks have special effects, others may prerequisites for the attack to have an effect.")
-        lines.append("For example, an attack might say 'This attack does 30 damage. If your opponent's Active Pokemon is Paralyzed, this attack does 60 damage instead.' In this case, the attack has a base damage of 30, but if the opponent's Active Pokemon is Paralyzed, the attack does 60 damage. So you should consider both possibilities when deciding whether to use this attack and when trying to predict how much damage it will do.")
 
     if my_active:
         _append_pokemon_lines(lines, my_active, is_mine=True)
@@ -299,7 +298,8 @@ def build_state_prompt(players, game_state, my_index, card_names, card_lookup, s
 
     lines += ["", "YOUR BENCH:"]
     if my_bench:
-        for b in my_bench:
+        for slot_i, b in my_bench:
+            lines.append(f"  [bench_index={slot_i}]")
             _append_pokemon_lines(lines, b, is_mine=True)
     else:
         lines.append("  (empty)")
@@ -356,13 +356,13 @@ def build_state_prompt(players, game_state, my_index, card_names, card_lookup, s
     in_play = []
     if my_active:
         in_play.append(("ACTIVE", None, my_active["name"]))
-    for bi, b in enumerate(my_bench):
-        in_play.append(("BENCH", bi, b["name"]))
+    for slot_i, b in my_bench:
+        in_play.append(("BENCH", slot_i, b["name"]))
 
     for i, card_id in enumerate(me["hand"]["cards"]):
         name = get_card_name(card_id, card_names)
         info = card_lookup.get(name, {})
-        if info.get("superType") != "Pokemon":
+        if info.get("superType") != 1:
             continue
         evolves_from = info.get("evolvesFrom", "")
         if not evolves_from:
@@ -822,7 +822,7 @@ def get_ai_prompt_response(prompt, players, game_state, my_index, card_names, ca
                 max_dmg = max_by_target.get(key, total_damage)
                 slot_info = describe_pokemon_slot(target_player_state["active"], card_names, card_lookup)
                 name = slot_info["name"] if slot_info else "Active"
-                hp_left = max(0, int(slot_info.get("hp") or 0) - target_player_state["active"].get("damage", 0))
+                hp_left = max(0, _parse_damage(slot_info.get("hp", 0)) - target_player_state["active"].get("damage", 0))
                 targets.append({"player": target_player_type, "slot": 1, "index": 0, "max": max_dmg, "name": name, "hp_left": hp_left})
 
         if 2 in valid_slots:
@@ -833,11 +833,12 @@ def get_ai_prompt_response(prompt, players, game_state, my_index, card_names, ca
                         max_dmg = max_by_target.get(key, total_damage)
                         slot_info = describe_pokemon_slot(b, card_names, card_lookup)
                         name = slot_info["name"] if slot_info else f"Bench {bi}"
-                        hp_left = max(0, int(slot_info.get("hp") or 0) - b.get("damage", 0))
+                        hp_left = max(0, _parse_damage(slot_info.get("hp", 0)) - b.get("damage", 0))
                         targets.append({"player": target_player_type, "slot": 2, "index": bi, "max": max_dmg, "name": name, "hp_left": hp_left})
 
         if not targets:
-            return []
+            allow_cancel = (prompt.get("options") or {}).get("allowCancel", True)
+            return None if allow_cancel else []
 
         targets_str = "\n".join(
             f"  [{i}] {t['name']} (max {t['max']} dmg here, {t['hp_left']} HP remaining)"
@@ -1004,7 +1005,7 @@ def get_ai_action(players, game_state, my_index, card_names, card_lookup, action
     prompt_parts = []
     if turn_plan_text:
         prompt_parts.append(turn_plan_text)
-    if rejected_this_turn:
+    if rejected_this_turn and len(rejected_this_turn) > 1:
         rejected_str = "\n".join(f"  - {r}" for r in rejected_this_turn)
         prompt_parts.append(f"REJECTED THIS TURN — do NOT attempt any of these again:\n{rejected_str}")
     elif last_rejection:

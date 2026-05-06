@@ -8,6 +8,27 @@ two AI bots play each other.
 Defaults to monkey1/monkey1, deck id 8 (however this only selects the one deck for monkey. Deck ids are unique to each deck).
 Invalid deck id just defaults to first deck in user's collection. Format default is 1 (standard).
 
+TO MAKE 2 AI PLAY AGAINST EACH OTHER THEN YOU WATCH (with dragapult vs dragapult):
+    create two terminals
+    in terminal 1 run:
+        cd ptcg-server
+        npm run start
+    in terminal 2 run:
+        cd ptcg-play
+        npm run start:local
+    
+    Open localhost:4200
+    Create own account/log into Twinleaf
+
+    create two terminals
+    in terminal 1 run: python mm_monkey.py -u monkey1 -p monkey1 -d 11
+    in terminal 2 run: python mm_monkey.py -u monkey2 -p monkey2 -d 12
+
+    On Twinleaf, click spectate and join the game (it'll say join).
+    Then, a new option will appear in the nav bar "Tables". Click tables and click on the first game.
+    You are now spectating the two ais.
+
+
 Usage:
     python mm_monkey.py -u monkey1 -p monkey1
     python mm_monkey.py -u monkey2 -p monkey2 -d 9 --format 1
@@ -193,7 +214,9 @@ def _emit_sync(event_name, data, timeout=10):
         done.set()
 
     sio.emit(event_name, data, callback=ack)
-    done.wait(timeout=timeout)
+    if not done.wait(timeout=timeout):
+        print(f"[emit_sync] TIMEOUT waiting for ack on {event_name}")
+        return {"message": "error", "data": "TIMEOUT"}
     return result[0]
 
 
@@ -251,7 +274,7 @@ def _take_action(players, game_state, my_index, card_names):
             return "retry"
 
         actions_this_turn += 1
-        rejected_this_turn = []
+        rejected_this_turn = ["This is a list of actions you have tried to take that have been rejected. Do not try to play these actions again. This list will clear once you perform an action that is valid and accepted by the server."]
         if _is_supporter:
             supporter_played_this_turn = True
         if _is_energy:
@@ -281,7 +304,7 @@ def _take_action(players, game_state, my_index, card_names):
             return "retry"
 
         actions_this_turn += 1
-        rejected_this_turn = []
+        rejected_this_turn = ["This is a list of actions you have tried to take that have been rejected. Do not try to play these actions again. This list will clear once you perform an action that is valid and accepted by the server."]
         print(f"[action] attack {attack_name!r} accepted")
         return "done"
 
@@ -302,7 +325,7 @@ def _take_action(players, game_state, my_index, card_names):
             return "retry"
 
         actions_this_turn += 1
-        rejected_this_turn = []
+        rejected_this_turn = ["This is a list of actions you have tried to take that have been rejected. Do not try to play these actions again. This list will clear once you perform an action that is valid and accepted by the server."]
         attack_committed = False
         print(f"[action] retreat to bench={bench_index} accepted")
         return "wait"
@@ -328,7 +351,7 @@ def _take_action(players, game_state, my_index, card_names):
             return "retry"
 
         actions_this_turn += 1
-        rejected_this_turn = []
+        rejected_this_turn = ["This is a list of actions you have tried to take that have been rejected. Do not try to play these actions again. This list will clear once you perform an action that is valid and accepted by the server."]
         print(f"[action] use_ability {ability_name!r} accepted")
         return "wait"
 
@@ -463,7 +486,7 @@ def on_state_change(data):
             supporter_played_this_turn = False
             energy_attached_this_turn = False
             last_rejection = None
-            rejected_this_turn = []
+            rejected_this_turn = ["This is a list of actions you have tried to take that have been rejected. Do not try to play these actions again. This list will clear once you perform an action that is valid and accepted by the server."]
             _waiting_for_prompt_ack = False
             prompt_fail_count = 0
             last_turn_number = turn
