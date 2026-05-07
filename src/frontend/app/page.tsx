@@ -26,9 +26,8 @@ const NAV_BUTTONS = [
 ];
 
 const STATS = [
-  { value: "AI", label: "Powered" },
   { value: "PTCG", label: "Engine" },
-  { value: "Live", label: "Matches" },
+  { value: "AI vs AI", label: "Matches" },
 ];
 
 export default function HomePage() {
@@ -135,7 +134,7 @@ export default function HomePage() {
 
         {/* Footer */}
         <p className="text-xs text-muted-teal-700 opacity-60 tracking-wide">
-          Built on the Twinleaf engine · Local instance
+          Built on the Twinleaf engine
         </p>
       </div>
     </div>
