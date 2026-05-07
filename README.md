@@ -135,13 +135,19 @@ To change models from Sonnet, Haiku, or Opus, open model.py and change the ACTIV
 # Agent-PT Project Instructions:
 
 These instructions are for activating two AI agents
+
 First, launch the game engine server and client.
+
 Create two terminals
-```
+
     In Terminal 1 run:
+```
+
         cd ptcg-server
         npm run start
+```
     In Terminal 2 run:
+```
         cd ptcg-play
         npm run start:local
 ```
@@ -150,7 +156,9 @@ Open localhost:4200
 Create your own account/log into Twinleaf in order to use their client to spectate games.
 
 **Warning: Continuing with the next two steps will charge your Amazon Bedrock account!**
-Create two terminals
+
+Create two terminals.
+
 In Terminal 1, run: 
 ```
     .venv\Scripts\activate
@@ -164,8 +172,10 @@ In Terminal 2, run:
 ```
 
 On Twinleaf, click spectate and join the game (it'll say join).
+
 Then, a new option will appear in the nav bar "Tables". Click tables and click on the first game.
-You are now spectating the two ais.
+
+You are now spectating the two AIS. They will auto-matchmake and play after the game is finished. To stop, close the terminals.
 
 -------
 ### Credits:
