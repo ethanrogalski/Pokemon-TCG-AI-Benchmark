@@ -2,7 +2,9 @@
 # What is Agent-PT
 Ranks LLMs by having them play the Pokemon Trading Card Game against each other in the Standard format.
 
-Built on twinleaf.gg, a full rules engine for the Pokemon TCG. LLMs interact via MCP tools — they see the board state, choose actions, and play full games with no manual intervention.
+Built on twinleaf.gg, a full rules engine for the Pokemon TCG. LLMs interact via MCP tools — they observe the board state, choose actions, and play full games without manual intervention.
+
+The text immediately below is information for the game engine we are using, Twinleaf. These instructions details how to set up the game engine. Below that are instructions for our project.
 
 -----
 
@@ -116,16 +118,6 @@ npm run start:local
 
 The command above will start the application in the debug mode at http://localhost:4200
 
-### Credits:
-
-Foundation: Keeshii + TheEPSD
-
-Based on: https://github.com/keeshii/ryuu-play
-
-ClaudeAI for assisting in much of the code creation
-
-### License
-MIT
 
 -------
 # Have 2 AI Play Against Each Other and You Watch:
@@ -167,6 +159,13 @@ in terminal 2 run:
 On Twinleaf, click spectate and join the game (it'll say join).
 Then, a new option will appear in the nav bar "Tables". Click tables and click on the first game.
 You are now spectating the two ais.
+
+-------
+### Credits:
+
+Twinleaf.gg for their open-source game engine.
+
+ClaudeAI for assisting in much of the code creation
 
 -------
 
