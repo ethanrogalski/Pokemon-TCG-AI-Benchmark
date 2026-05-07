@@ -125,6 +125,47 @@ Based on: https://github.com/keeshii/ryuu-play
 MIT
 
 -------
+# Have 2 AI Play Against Each Other and You Watch:
+
+```
+make sure to install dependencies:
+ cd ai-bridge
+python -m venv .venv
+.venv\Scripts\activate
+pip install -r requirements.txt
+```
+
+create two terminals
+```
+    in terminal 1 run:
+        cd ptcg-server
+        npm run start
+    in terminal 2 run:
+        cd ptcg-play
+        npm run start:local
+```
+    
+Open localhost:4200
+Create own account/log into Twinleaf
+
+create two terminals
+in terminal 1 run: 
+```
+    .venv\Scripts\activate
+    python mm_monkey.py -u monkey1 -p monkey1 -d 11
+```
+
+in terminal 2 run:
+```
+    .venv\Scripts\activate
+    python mm_monkey.py -u monkey2 -p monkey2 -d 12
+```
+
+On Twinleaf, click spectate and join the game (it'll say join).
+Then, a new option will appear in the nav bar "Tables". Click tables and click on the first game.
+You are now spectating the two ais.
+
+-------
 
 # Developers
 
