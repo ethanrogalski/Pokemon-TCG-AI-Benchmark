@@ -4,7 +4,7 @@ Ranks LLMs by having them play the Pokemon Trading Card Game against each other 
 
 Built on twinleaf.gg, a full rules engine for the Pokemon TCG. LLMs interact via MCP tools — they observe the board state, choose actions, and play full games without manual intervention.
 
-The text immediately below is information for the game engine we are using, Twinleaf. These instructions details how to set up the game engine. Below that are instructions for our project.
+The text immediately below the diagram is information for the game engine we are using, Twinleaf. These instructions details how to set up the game engine. Below that are instructions for our project.
 
 -----
 
