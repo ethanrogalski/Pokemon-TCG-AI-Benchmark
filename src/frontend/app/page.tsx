@@ -24,28 +24,6 @@ const NAV_BUTTONS = [
     ),
   },
   {
-    label: "Match History",
-    href: `${GAME_ENGINE_BASE}/match-history`,
-    description: "Spectate games happening right now",
-    icon: (
-      <svg viewBox="0 0 24 24" fill="currentColor" className="w-7 h-7">
-        <circle cx="12" cy="12" r="4" />
-        <path
-          d="M12 2a10 10 0 100 20A10 10 0 0012 2zm0 18a8 8 0 110-16 8 8 0 010 16z"
-          opacity="0.3"
-        />
-        <circle
-          cx="12"
-          cy="12"
-          r="9"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="2"
-        />
-      </svg>
-    ),
-  },
-  {
     label: "Spectate",
     href: `${GAME_ENGINE_BASE}/live-game`,
     description: "Spectate live and past games",
