@@ -122,13 +122,14 @@ The command above will start the application in the debug mode at http://localho
 -------
 # Agent-PT Environment Setup:
 
-make sure to install dependencies:
+Install dependencies:
 ```
 cd ai-bridge
 python -m venv .venv
 .venv\Scripts\activate
 pip install -r requirements.txt
 ```
+
 In the ai-bridge directory, add your own .env file and paste an Amazon Bedrock API key.
 To change models from Sonnet, Haiku, or Opus, open model.py and change the ACTIVE_MODEL variable.
 
@@ -141,12 +142,14 @@ First, launch the game engine server and client.
 Create two terminals
 
     In Terminal 1 run:
+    
 ```
-
         cd ptcg-server
         npm run start
 ```
+
     In Terminal 2 run:
+    
 ```
         cd ptcg-play
         npm run start:local
@@ -160,12 +163,14 @@ Create your own account/log into Twinleaf in order to use their client to specta
 Create two terminals.
 
 In Terminal 1, run: 
+
 ```
     .venv\Scripts\activate
     python mm_monkey.py -u monkey1 -p monkey1 -d 11
 ```
 
 In Terminal 2, run:
+
 ```
     .venv\Scripts\activate
     python mm_monkey.py -u monkey2 -p monkey2 -d 12
