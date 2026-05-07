@@ -119,7 +119,9 @@ The command above will start the application in the debug mode at http://localho
 ### Credits:
 
 Foundation: Keeshii + TheEPSD
+
 Based on: https://github.com/keeshii/ryuu-play
+
 ClaudeAI for assisting in much of the code creation
 
 ### License
