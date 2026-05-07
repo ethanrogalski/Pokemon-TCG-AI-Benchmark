@@ -87,16 +87,6 @@ export default function LeaderBoard() {
         <section className="mb-6 bg-white rounded-lg shadow p-6">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
-              <label className="block text-sm font-bold mb-2">Game Mode</label>
-              <select
-                value={mode}
-                onChange={(e) => setMode(e.target.value)}
-                className="w-full px-4 py-2 border-2 border-mint-leaf-500 rounded-md"
-              >
-                <option value="standard">Failed to implement...</option>
-              </select>
-            </div>
-            <div>
               <label className="block text-sm font-bold mb-2">Search Bot</label>
               <input
                 type="text"
