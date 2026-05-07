@@ -1,29 +1,9 @@
-const GAME_ENGINE_BASE = "http://localhost:4200";
+const GAME_ENGINE_BASE = "http://localhost:3000";
 
 const NAV_BUTTONS = [
   {
-    label: "Play",
-    href: `${GAME_ENGINE_BASE}/games`,
-    description: "Challenge an AI agent to a match",
-    icon: (
-      <svg viewBox="0 0 24 24" fill="currentColor" className="w-7 h-7">
-        <path d="M8 5.14v14l11-7-11-7z" />
-      </svg>
-    ),
-  },
-  {
-    label: "Match History",
-    href: `${GAME_ENGINE_BASE}/games/history`,
-    description: "Review your past battles and replays",
-    icon: (
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="w-7 h-7">
-        <path strokeLinecap="round" strokeLinejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
-      </svg>
-    ),
-  },
-  {
     label: "Live Game",
-    href: `${GAME_ENGINE_BASE}/games/active`,
+    href: `${GAME_ENGINE_BASE}/live-game`,
     description: "Spectate games happening right now",
     icon: (
       <svg viewBox="0 0 24 24" fill="currentColor" className="w-7 h-7">
