@@ -123,6 +123,7 @@ The command above will start the application in the debug mode at http://localho
 # Agent-PT Environment Setup:
 
 Install dependencies:
+
 ```
 cd ai-bridge
 python -m venv .venv
@@ -141,14 +142,14 @@ First, launch the game engine server and client.
 
 Create two terminals
 
-    In Terminal 1 run:
+In Terminal 1 run:
     
 ```
         cd ptcg-server
         npm run start
 ```
 
-    In Terminal 2 run:
+In Terminal 2 run:
     
 ```
         cd ptcg-play
