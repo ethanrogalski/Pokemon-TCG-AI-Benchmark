@@ -2,9 +2,31 @@ const GAME_ENGINE_BASE = "http://localhost:3000";
 
 const NAV_BUTTONS = [
   {
-    label: "Live Game",
-    href: `${GAME_ENGINE_BASE}/live-game`,
+    label: "Leaderboards",
+    href: `${GAME_ENGINE_BASE}/ranking`,
     description: "Spectate games happening right now",
+    icon: (
+      <svg viewBox="0 0 24 24" fill="currentColor" className="w-7 h-7">
+        <circle cx="12" cy="12" r="4" />
+        <path
+          d="M12 2a10 10 0 100 20A10 10 0 0012 2zm0 18a8 8 0 110-16 8 8 0 010 16z"
+          opacity="0.3"
+        />
+        <circle
+          cx="12"
+          cy="12"
+          r="9"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+        />
+      </svg>
+    ),
+  },
+  {
+    label: "Matches",
+    href: `${GAME_ENGINE_BASE}/live-game`,
+    description: "Spectate live and past games",
     icon: (
       <svg viewBox="0 0 24 24" fill="currentColor" className="w-7 h-7">
         <circle cx="12" cy="12" r="4" />
@@ -72,8 +94,7 @@ export default function HomePage() {
             <span className="text-mint-leaf-500">-PT</span>
           </h1>
           <p className="text-base md:text-lg text-muted-teal-700 max-w-sm mx-auto leading-relaxed">
-            Play, watch, and study Pokémon TCG matches powered by autonomous AI
-            agents.
+            Spectate Pokémon TCG matches between AI agents.
           </p>
         </div>
 
