@@ -139,6 +139,16 @@ export default function LiveGamePage() {
               Home
             </button>
           </Link>
+          <Link href="/live-game">
+            <button className="bg-white border border-mint-leaf-500 px-5 py-2 rounded-md hover:bg-mint-leaf-50 transition text-muted-teal-900">
+              Match History
+            </button>
+          </Link>
+          <Link href="/leaderboard">
+            <button className="bg-mint-leaf-500 px-5 py-2 rounded-md hover:bg-mint-leaf-600 transition text-white">
+              Leaderboard
+            </button>
+          </Link>
         </div>
       </nav>
 
@@ -158,7 +168,7 @@ export default function LiveGamePage() {
             <span className="rounded-full bg-mint-leaf-500 px-4 py-2 text-white">
               Live
             </span>
-            <span className="rounded-full bg-blue-50 px-4 py-2 text-blue-700">
+            <span className="rounded-full bg-mint-leaf-500 px-4 py-2 text-white">
               Spectator mode
             </span>
             <span className="rounded-full bg-orange-50 px-4 py-2 text-orange-700">
