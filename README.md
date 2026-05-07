@@ -145,15 +145,15 @@ Create two terminals
 In Terminal 1 run:
     
 ```
-        cd ptcg-server
-        npm run start
+    cd ptcg-server
+    npm run start
 ```
 
 In Terminal 2 run:
     
 ```
-        cd ptcg-play
-        npm run start:local
+    cd ptcg-play
+    npm run start:local
 ```
     
 Open localhost:4200
@@ -189,6 +189,8 @@ You are now spectating the two AIS. They will auto-matchmake and play after the 
 Twinleaf.gg for their open-source game engine.
 
 ClaudeAI for assisting in much of the code creation
+
+GitHub Copilot for marginal assistance in code reviews.
 
 -------
 
