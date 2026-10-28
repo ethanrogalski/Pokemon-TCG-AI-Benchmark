@@ -43,12 +43,11 @@ src/**/*.md
 CLAUDE.md
 
 # Python
-/__pycache__
+__pycache__/
+*.pyc
+.venv/
 /env
 blackbox.py
-__pycache__/blackbox.cpython-311.pyc
-env/bin/
-env/lib/python3.11/
 
 # Node.js
 node_modules

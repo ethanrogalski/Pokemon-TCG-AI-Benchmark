@@ -1,7 +1,7 @@
 """
 agent.py — AI decision engine for the Pokemon TCG bot.
 
-Swap this file (or change the import in MCP.py) to use a different AI provider.
+Swap this file (or change the import in bot.py) to use a different AI provider.
 
 Contract:
     get_ai_action(players, game_state, my_index, card_names, card_lookup)

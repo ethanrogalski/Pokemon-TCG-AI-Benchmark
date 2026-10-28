@@ -42,17 +42,10 @@ npm install -g n
 n 18
 ```
 
-On macOS, if Node was installed through Homebrew, you may need to unlink it first:
+If Node was installed through Homebrew, you may need to unlink it first:
 
 ```
 brew unlink node
-```
-
-On Windows, use [nvm-windows](https://github.com/coreybutler/nvm-windows/releases) (added step — not in the original README). Download and run the installer, then in a new terminal:
-
-```
-nvm install 18
-nvm use 18
 ```
 
 `config.js` contains all available options and its default values are defined in the `src/config.ts`
@@ -122,17 +115,20 @@ The command above will start the application in the debug mode at http://localho
 -------
 # Agent-PT Environment Setup:
 
-Install dependencies:
+Install dependencies with [uv](https://docs.astral.sh/uv/) (`brew install uv`). It creates `.venv` and installs Python 3.11 if needed:
 
 ```
 cd ai-bridge
-python -m venv .venv
-.venv\Scripts\activate
-pip install -r requirements.txt
+uv sync
 ```
 
-In the ai-bridge directory, add your own .env file and paste an Amazon Bedrock API key.
-To change models from Sonnet, Haiku, or Opus, open model.py and change the ACTIVE_MODEL variable.
+Set up AWS Bedrock access:
+
+1. In the AWS console, open Amazon Bedrock in `us-east-1` and request access to the Anthropic Claude models under **Model access**.
+2. In Bedrock, go to **API keys** and generate an API key.
+3. Copy `ai-bridge/.env.example` to `ai-bridge/.env` and paste the key into `AWS_BEARER_TOKEN_BEDROCK`. The `.env` file is gitignored.
+
+To switch between Sonnet, Haiku, and Opus, change `ACTIVE_MODEL` in `ai-bridge/models.py`.
 
 # Agent-PT Project Instructions:
 
@@ -166,16 +162,18 @@ Create two terminals.
 In Terminal 1, run: 
 
 ```
-    .venv\Scripts\activate
-    python mm_monkey.py -u monkey1 -p monkey1 -d 11
+    cd ai-bridge
+    uv run python bot.py -u monkey1 -p monkey1 -d 11
 ```
 
 In Terminal 2, run:
 
 ```
-    .venv\Scripts\activate
-    python mm_monkey.py -u monkey2 -p monkey2 -d 12
+    cd ai-bridge
+    uv run python bot.py -u monkey2 -p monkey2 -d 12
 ```
+
+By default `bot.py` joins matchmaking. Use `--invite` to wait for a challenge instead, or `--game-id N` to rejoin an existing game. Run `uv run python bot.py --help` for all options.
 
 On Twinleaf, click spectate and join the game (it'll say join).
 

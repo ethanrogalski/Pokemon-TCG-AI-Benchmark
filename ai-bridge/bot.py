@@ -1,3 +1,26 @@
+"""
+bot.py — AI bot that logs into the Twinleaf server and plays Pokemon TCG using agent.py.
+
+Replaces the old MCP.py / auto_monkey.py / mm_monkey.py scripts. Pick how the bot finds a game:
+
+    (default)       Join matchmaking. After each game, re-queue automatically.
+    --invite        Wait for someone to challenge this account, accept with the chosen deck.
+    --game-id N     Rejoin an existing game N, play it out, then exit.
+
+Usage (run from the ai-bridge directory):
+    uv run python bot.py -u monkey1 -p monkey1 -d 11
+    uv run python bot.py -u monkey2 -p monkey2 -d 12
+    uv run python bot.py -u monkey1 -p monkey1 --invite
+    uv run python bot.py -u monkey1 -p monkey1 --game-id 42
+
+Decks in the committed database.sq3:
+    monkey1: 11 = Dragapult, 13 = Lucario
+    monkey2: 12 = Dragapult, 10 = Lucario
+
+Settings can also come from .env: SERVER_URL, BOT_USERNAME, BOT_PASSWORD, DECK_ID, FORMAT.
+"""
+
+import argparse
 import base64
 import json
 import os
@@ -10,21 +33,39 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from agent import get_ai_action, get_ai_prompt_response, generate_turn_plan, build_state_prompt  # swap this import to change AI providers
+from agent import get_ai_action, get_ai_prompt_response, generate_turn_plan, build_state_prompt
 
-SERVER_URL = os.environ.get("SERVER_URL", "http://localhost:8080")
-USERNAME = os.environ.get("BOT2_USERNAME", "monkey")
-PASSWORD = os.environ.get("BOT2_PASSWORD", "monkey")
-GAME_ID = int(os.environ.get("GAME_ID", "1"))
+parser = argparse.ArgumentParser(description="AI bot that plays Pokemon TCG on a Twinleaf server.")
+parser.add_argument("-u", "--username", default=os.environ.get("BOT_USERNAME", "monkey1"), help="Bot account username")
+parser.add_argument("-p", "--password", default=os.environ.get("BOT_PASSWORD", "monkey1"), help="Bot account password")
+parser.add_argument("-d", "--deck-id", type=int, default=int(os.environ["DECK_ID"]) if os.environ.get("DECK_ID") else None,
+                    help="Deck ID to use (defaults to the account's first deck)")
+parser.add_argument("--server", default=os.environ.get("SERVER_URL", "http://localhost:8080"), help="Server URL")
+parser.add_argument("--format", type=int, default=int(os.environ.get("FORMAT", "1")), help="Matchmaking format (1=STANDARD)")
+parser.add_argument("--no-plan", action="store_true", help="Skip the once-per-turn planning call to the model")
+mode = parser.add_mutually_exclusive_group()
+mode.add_argument("--invite", action="store_true", help="Wait for game invitations instead of joining matchmaking")
+mode.add_argument("--game-id", type=int, help="Rejoin this existing game, then exit when it ends")
+args = parser.parse_args()
+
+SERVER_URL = args.server
+USERNAME = args.username
+PASSWORD = args.password
+FORMAT = args.format
+USE_TURN_PLAN = not args.no_plan
 
 PLAYER_TURN_PHASE = 2
+GAME_FINISHED_PHASE = 7
 # CardTarget.player is relative to the acting player:
 #   BOTTOM_PLAYER (2) = the acting player's own Pokemon
 #   TOP_PLAYER    (1) = the opponent's Pokemon
-MY_PLAYER_TYPE = 2   # PlayerType.BOTTOM_PLAYER
-OPP_PLAYER_TYPE = 1  # PlayerType.TOP_PLAYER
+MY_PLAYER_TYPE = 2
+OPP_PLAYER_TYPE = 1
 SLOT_MAP = {"BOARD": 0, "ACTIVE": 1, "BENCH": 2}
 MAX_ACTIONS_PER_TURN = 30
+# Server errors that mean "try again on the next state change", not "this action is invalid"
+TRANSIENT_ERRORS = ("ACTION_IN_PROGRESS", "NOT_YOUR_TURN")
+REJECTED_HEADER = "This is a list of actions you have tried to take that have been rejected. Do not try to play these actions again. This list will clear once you perform an action that is valid and accepted by the server."
 
 # ---------------------------------------------------------
 # 1. Login
@@ -32,10 +73,10 @@ MAX_ACTIONS_PER_TURN = 30
 resp = requests.post(f"{SERVER_URL}/v1/login", json={"name": USERNAME, "password": PASSWORD})
 if not resp.ok or "token" not in resp.json():
     print("Login failed:", resp.json())
-    exit(1)
+    sys.exit(1)
 
 token = resp.json()["token"]
-print("Logged in.")
+print(f"Logged in as {USERNAME}.")
 
 # ---------------------------------------------------------
 # 2. Fetch card data for attack/HP lookups
@@ -58,8 +99,35 @@ except Exception as e:
     print(f"Card data fetch error: {e}")
 
 # ---------------------------------------------------------
-# 3. Game state
+# 3. Fetch deck (used for matchmaking and accepting invites)
 # ---------------------------------------------------------
+bot_deck = []
+deck_id = None
+try:
+    r = requests.get(f"{SERVER_URL}/v1/decks/list", headers={"Auth-Token": token})
+    if r.ok:
+        decks = r.json().get("decks", [])
+        if not decks:
+            print(f"No decks found for {USERNAME}. Please create a deck in the UI first.")
+            sys.exit(1)
+        deck_obj = next((d for d in decks if d.get("id") == args.deck_id), decks[0])
+        if args.deck_id is not None and deck_obj.get("id") != args.deck_id:
+            print(f"Deck {args.deck_id} not found for {USERNAME}, using first deck instead.")
+        deck_id = deck_obj.get("id")
+        raw_cards = deck_obj.get("cards", "[]")
+        bot_deck = json.loads(raw_cards) if isinstance(raw_cards, str) else raw_cards
+        print(f"Using deck: {deck_obj.get('name', 'Unknown')} (id={deck_id}, {len(bot_deck)} cards)")
+    else:
+        print(f"Failed to fetch decks ({r.status_code}).")
+        sys.exit(1)
+except Exception as e:
+    print(f"Deck fetch error: {e}")
+    sys.exit(1)
+
+# ---------------------------------------------------------
+# 4. Game state (reset between games)
+# ---------------------------------------------------------
+GAME_ID = None
 actions_this_turn = 0
 last_turn_number = -1
 turn_passed = False
@@ -69,25 +137,57 @@ supporter_played_this_turn = False
 energy_attached_this_turn = False
 last_sent_prompt_id = None
 last_rejection = None
-rejected_this_turn = ["This is a list of actions you have tried to take that have been rejected. Do not try to play these actions again. This list will clear once you perform an action that is valid and accepted by the server."]
-_current_turn_plan = None
+rejected_this_turn = [REJECTED_HEADER]
 last_prompt_rejection = None
 last_rejected_prompt_id = None
 _current_context = None
+_current_turn_plan = None
 _waiting_for_prompt_ack = False  # True after sending resolvePrompt, until ack fires
 prompt_fail_count = 0            # consecutive rejections of the current prompt
 _state_lock = threading.Lock()   # only one stateChange processed at a time
 
-# Prompts resolved auto
-# - "Alert", "Coin flip", "WaitPrompt" = just acknowledge
-# - "Choose prize" = pick the first non-empty prize(s)
+
+def _reset_game_state():
+    global actions_this_turn, last_turn_number, turn_passed, attack_committed
+    global chat_sent_this_turn, supporter_played_this_turn, energy_attached_this_turn
+    global last_sent_prompt_id, last_rejection, rejected_this_turn, last_prompt_rejection, last_rejected_prompt_id
+    global _current_context, _current_turn_plan, _waiting_for_prompt_ack, prompt_fail_count
+    actions_this_turn = 0
+    last_turn_number = -1
+    turn_passed = False
+    attack_committed = False
+    chat_sent_this_turn = False
+    supporter_played_this_turn = False
+    energy_attached_this_turn = False
+    last_sent_prompt_id = None
+    last_rejection = None
+    rejected_this_turn = [REJECTED_HEADER]
+    last_prompt_rejection = None
+    last_rejected_prompt_id = None
+    _current_context = None
+    _current_turn_plan = None
+    _waiting_for_prompt_ack = False
+    prompt_fail_count = 0
+
+
+# ---------------------------------------------------------
+# 5. Prompt resolver
+# ---------------------------------------------------------
+# Prompts resolved automatically:
+# - "Alert", "Coin flip", "WaitPrompt", "Show ..." / "Confirm cards" = just acknowledge
+# - "Invite player" = accept with our deck
+# - "Choose prize" = pick the first prize(s)
 # - "Shuffle deck" = shuffle all cards in deck
-# - Everything else sent to AI
-def resolve_prompt(prompt, players, game_state, my_index, card_names, card_lookup, prompt_fail_count=0):
+# - Everything else is sent to the AI
+def resolve_prompt(prompt, players, game_state, my_index, card_names, card_lookup, last_rejection=None, prompt_fail_count=0):
     ptype = prompt.get("type", "")
 
     if ptype in ("Alert", "Coin flip", "WaitPrompt", "Show mulligan", "Show cards", "Confirm cards"):
         return True
+
+    if ptype == "Invite player":
+        print("[prompt] Accepting game invitation with deck.")
+        return bot_deck
 
     if ptype == "Choose prize":
         opts = prompt.get("options", {})
@@ -98,7 +198,7 @@ def resolve_prompt(prompt, players, game_state, my_index, card_names, card_looku
         deck_cards = players[my_index].get("deck", {}).get("cards", [])
         return list(range(len(deck_cards)))
 
-    return get_ai_prompt_response(prompt, players, game_state, my_index, card_names, card_lookup, last_rejection=last_prompt_rejection, prompt_fail_count=prompt_fail_count)
+    return get_ai_prompt_response(prompt, players, game_state, my_index, card_names, card_lookup, last_rejection=last_rejection, prompt_fail_count=prompt_fail_count)
 
 
 def _is_rejection(ack_data):
@@ -125,10 +225,36 @@ def _emit_sync(event_name, data, timeout=10):
     return result[0]
 
 
+# ---------------------------------------------------------
+# 6. Action dispatcher
+# ---------------------------------------------------------
+def _handle_rejection(description, ack_data):
+    """Record a rejected action so the AI won't repeat it. Returns 'wait' or 'retry'."""
+    global last_rejection
+    error = ack_data.get("data", ack_data) if isinstance(ack_data, dict) else ack_data
+    reason = f"{description} rejected: {error}"
+    print(f"[action] REJECTED {reason}")
+    if error in TRANSIENT_ERRORS:
+        return "wait"
+    rejected_this_turn.append(reason)
+    last_rejection = reason
+    return "retry"
+
+
+def _record_accepted_action():
+    global actions_this_turn, rejected_this_turn
+    actions_this_turn += 1
+    rejected_this_turn = [REJECTED_HEADER]
+
+
+# Emits one action, waits for the server ack, and returns:
+#   "done"  = turn is over (attacked or passed)
+#   "wait"  = wait for the next stateChange with the updated board
+#   "retry" = action was rejected, ask the AI again with the same board
 def _take_action(players, game_state, my_index, card_names):
-    """Emit one action, wait for ack, return 'done' / 'wait' / 'retry'."""
-    global actions_this_turn, turn_passed, attack_committed, chat_sent_this_turn
-    global supporter_played_this_turn, energy_attached_this_turn, last_rejection, _current_turn_plan, rejected_this_turn
+    global turn_passed, attack_committed, chat_sent_this_turn
+    global supporter_played_this_turn, energy_attached_this_turn, last_rejection, _current_turn_plan
+
     if attack_committed or turn_passed:
         return "done"
 
@@ -141,7 +267,7 @@ def _take_action(players, game_state, my_index, card_names):
         sio.emit("game:action:passTurn", {"gameId": GAME_ID})
         return "done"
 
-    if actions_this_turn == 0 and _current_turn_plan is None:
+    if USE_TURN_PLAN and actions_this_turn == 0 and _current_turn_plan is None:
         state_for_plan = build_state_prompt(
             players, game_state, my_index, card_names, card_lookup,
             supporter_played_this_turn=supporter_played_this_turn,
@@ -167,33 +293,25 @@ def _take_action(players, game_state, my_index, card_names):
         bench_index = action_input.get("bench_index", 0)
 
         hand_cards = players[my_index]["hand"]["cards"]
-        _card_name = card_names[hand_cards[hand_index]] if hand_index < len(hand_cards) and isinstance(hand_cards[hand_index], int) and hand_cards[hand_index] < len(card_names) else ""
-        _is_supporter = card_lookup.get(_card_name, {}).get("trainerType") == 1
-        _is_energy = card_lookup.get(_card_name, {}).get("superType") == 3
+        card_name = card_names[hand_cards[hand_index]] if hand_index < len(hand_cards) and isinstance(hand_cards[hand_index], int) and hand_cards[hand_index] < len(card_names) else ""
+        is_supporter = card_lookup.get(card_name, {}).get("trainerType") == 1
+        is_energy = card_lookup.get(card_name, {}).get("superType") == 3
 
         ack_data = _emit_sync("game:action:playCard", {
             "gameId": GAME_ID,
             "handIndex": hand_index,
             "target": {"player": MY_PLAYER_TYPE, "slot": slot, "index": bench_index},
         })
-
         if _is_rejection(ack_data):
-            reason = f"play_card(hand={hand_index} '{_card_name}', slot={action_input.get('target_slot')}) rejected: {ack_data.get('data', ack_data) if isinstance(ack_data, dict) else ack_data}"
-            print(f"[action] REJECTED {reason}")
-            if isinstance(ack_data, dict) and ack_data.get("data") in ("ACTION_IN_PROGRESS", "NOT_YOUR_TURN"):
-                return "wait"
-            rejected_this_turn.append(reason)
-            last_rejection = reason
-            return "retry"
+            return _handle_rejection(f"play_card(hand={hand_index} '{card_name}', slot={action_input.get('target_slot')})", ack_data)
 
-        actions_this_turn += 1
-        rejected_this_turn = ["This is a list of actions you have tried to take that have been rejected. Do not try to play these actions again. This list will clear once you perform an action that is valid and accepted by the server."]
-        if _is_supporter:
+        _record_accepted_action()
+        if is_supporter:
             supporter_played_this_turn = True
-        if _is_energy:
+        if is_energy:
             energy_attached_this_turn = True
         print(f"[action] play_card hand={hand_index} accepted")
-        return "wait"  # wait for next stateChange with updated board state
+        return "wait"
 
     elif action_name == "attack":
         attack_name = action_input.get("attack_name", "")
@@ -205,19 +323,11 @@ def _take_action(players, game_state, my_index, card_names):
 
         attack_committed = True
         ack_data = _emit_sync("game:action:attack", {"gameId": GAME_ID, "attack": attack_name})
-
         if _is_rejection(ack_data):
-            reason = f"attack({attack_name!r}) rejected: {ack_data.get('data', ack_data) if isinstance(ack_data, dict) else ack_data}"
-            print(f"[action] REJECTED {reason}")
             attack_committed = False
-            if isinstance(ack_data, dict) and ack_data.get("data") in ("ACTION_IN_PROGRESS", "NOT_YOUR_TURN"):
-                return "wait"
-            rejected_this_turn.append(reason)
-            last_rejection = reason
-            return "retry"
+            return _handle_rejection(f"attack({attack_name!r})", ack_data)
 
-        actions_this_turn += 1
-        rejected_this_turn = ["This is a list of actions you have tried to take that have been rejected. Do not try to play these actions again. This list will clear once you perform an action that is valid and accepted by the server."]
+        _record_accepted_action()
         print(f"[action] attack {attack_name!r} accepted")
         return "done"
 
@@ -226,22 +336,13 @@ def _take_action(players, game_state, my_index, card_names):
         attack_committed = True
         sio.emit("game:action:retreatStart", {"gameId": GAME_ID})
         ack_data = _emit_sync("game:action:retreat", {"gameId": GAME_ID, "to": bench_index})
-
-        if _is_rejection(ack_data):
-            reason = f"retreat(bench={bench_index}) rejected: {ack_data.get('data', ack_data) if isinstance(ack_data, dict) else ack_data}"
-            print(f"[action] REJECTED {reason}")
-            attack_committed = False
-            if isinstance(ack_data, dict) and ack_data.get("data") in ("ACTION_IN_PROGRESS", "NOT_YOUR_TURN"):
-                return "wait"
-            rejected_this_turn.append(reason)
-            last_rejection = reason
-            return "retry"
-
-        actions_this_turn += 1
-        rejected_this_turn = ["This is a list of actions you have tried to take that have been rejected. Do not try to play these actions again. This list will clear once you perform an action that is valid and accepted by the server."]
         attack_committed = False  # retreat doesn't end the turn; can still attack
+        if _is_rejection(ack_data):
+            return _handle_rejection(f"retreat(bench={bench_index})", ack_data)
+
+        _record_accepted_action()
         print(f"[action] retreat to bench={bench_index} accepted")
-        return "wait"  # wait for next stateChange with updated board state
+        return "wait"
 
     elif action_name == "use_ability":
         ability_name = action_input.get("ability_name", "")
@@ -253,18 +354,10 @@ def _take_action(players, game_state, my_index, card_names):
             "ability": ability_name,
             "target": {"player": MY_PLAYER_TYPE, "slot": slot, "index": bench_index},
         })
-
         if _is_rejection(ack_data):
-            reason = f"use_ability({ability_name!r}) rejected: {ack_data.get('data', ack_data) if isinstance(ack_data, dict) else ack_data}"
-            print(f"[action] REJECTED {reason}")
-            if isinstance(ack_data, dict) and ack_data.get("data") in ("ACTION_IN_PROGRESS", "NOT_YOUR_TURN"):
-                return "wait"
-            rejected_this_turn.append(reason)
-            last_rejection = reason
-            return "retry"
+            return _handle_rejection(f"use_ability({ability_name!r})", ack_data)
 
-        actions_this_turn += 1
-        rejected_this_turn = ["This is a list of actions you have tried to take that have been rejected. Do not try to play these actions again. This list will clear once you perform an action that is valid and accepted by the server."]
+        _record_accepted_action()
         print(f"[action] use_ability {ability_name!r} accepted")
         return "wait"
 
@@ -277,18 +370,11 @@ def _take_action(players, game_state, my_index, card_names):
             chat_sent_this_turn = True
 
         ack_data = _emit_sync("game:action:passTurn", {"gameId": GAME_ID})
-
         if _is_rejection(ack_data):
-            reason = f"pass_turn rejected: {ack_data.get('data', ack_data) if isinstance(ack_data, dict) else ack_data}"
-            print(f"[action] REJECTED {reason}")
             turn_passed = False
-            if isinstance(ack_data, dict) and ack_data.get("data") in ("ACTION_IN_PROGRESS", "NOT_YOUR_TURN"):
-                return "wait"
-            rejected_this_turn.append(reason)
-            last_rejection = reason
-            return "retry"
+            return _handle_rejection("pass_turn", ack_data)
 
-        actions_this_turn += 1
+        _record_accepted_action()
         print("[action] pass_turn accepted")
         return "done"
 
@@ -297,11 +383,32 @@ def _take_action(players, game_state, my_index, card_names):
         return "wait"
 
 
+# ---------------------------------------------------------
+# 7. State change handler
+# ---------------------------------------------------------
+def _on_game_over():
+    if args.game_id is not None:
+        print("Exiting.")
+        sio.disconnect()
+        sys.exit(0)
+    _reset_game_state()
+    if args.invite:
+        print("Waiting for the next game invitation...")
+    else:
+        _join_queue()
+
+
+# Runs on every stateChange from the server: answers any pending prompt first,
+# otherwise takes actions while it's our turn.
 def on_state_change(data):
     if not _state_lock.acquire(blocking=False):
-        return
+        return  # another thread is already processing a stateChange — drop this one
 
-    global actions_this_turn, last_turn_number, turn_passed, attack_committed, chat_sent_this_turn, supporter_played_this_turn, energy_attached_this_turn, last_sent_prompt_id, last_rejection, rejected_this_turn, _current_turn_plan, last_prompt_rejection, last_rejected_prompt_id, _current_context, _waiting_for_prompt_ack, prompt_fail_count
+    global actions_this_turn, last_turn_number, turn_passed, attack_committed
+    global chat_sent_this_turn, supporter_played_this_turn, energy_attached_this_turn
+    global last_sent_prompt_id, last_rejection, rejected_this_turn, last_prompt_rejection, last_rejected_prompt_id
+    global _current_context, _current_turn_plan, _waiting_for_prompt_ack, prompt_fail_count
+
     try:
         raw_state = base64.b64decode(data["stateData"]).decode("utf-8")
         parsed = json.loads(raw_state)
@@ -312,12 +419,12 @@ def on_state_change(data):
         if my_index is None:
             return
 
-        if game_state.get("phase") == 7:  # GamePhase.FINISHED
+        if game_state.get("phase") == GAME_FINISHED_PHASE:
             winner = game_state.get("winner", -1)
             winner_name = players[winner]["name"] if winner in (0, 1) else "draw"
-            print(f"Game over! Winner: {winner_name}. Exiting.")
-            sio.disconnect()
-            sys.exit(0)
+            print(f"Game over! Winner: {winner_name}.")
+            _on_game_over()
+            return
 
         card_names = game_state.get("cardNames", [])
         my_player_id = players[my_index].get("id")
@@ -340,6 +447,7 @@ def on_state_change(data):
             _waiting_for_prompt_ack = True  # set before any prints so concurrent threads see it immediately
             ptype = my_prompt.get("type", "")
             print(f"[prompt] id={prompt_id} type={ptype} — {my_prompt.get('message', '')}")
+
             # Dump full prompt for hard-to-debug types
             if ptype in ("Choose cards", "Choose pokemon"):
                 opts = my_prompt.get("options", {})
@@ -349,7 +457,8 @@ def on_state_change(data):
                 named = [(i, card_names[c] if isinstance(c, int) and c < len(card_names) else str(c))
                          for i, c in enumerate(cards_data)]
                 print(f"[prompt] named cards: {named[:30]}")
-            result = resolve_prompt(my_prompt, players, game_state, my_index, card_names, card_lookup, prompt_fail_count=prompt_fail_count)
+
+            result = resolve_prompt(my_prompt, players, game_state, my_index, card_names, card_lookup, last_prompt_rejection, prompt_fail_count=prompt_fail_count)
             print(f"[prompt] sending result: {result!r}")
 
             def on_resolve_ack(ack_data=None, *_):
@@ -391,7 +500,7 @@ def on_state_change(data):
             supporter_played_this_turn = False
             energy_attached_this_turn = False
             last_rejection = None
-            rejected_this_turn = ["This is a list of actions you have tried to take that have been rejected. Do not try to play these actions again. This list will clear once you perform an action that is valid and accepted by the server."]
+            rejected_this_turn = [REJECTED_HEADER]
             _current_turn_plan = None
             _waiting_for_prompt_ack = False
             prompt_fail_count = 0
@@ -414,17 +523,62 @@ def on_state_change(data):
 
 
 # ---------------------------------------------------------
-# 4. Connect and run
+# 8. Finding a game: matchmaking, invites, or rejoin
 # ---------------------------------------------------------
+def _join_game(game_id):
+    global GAME_ID
+    GAME_ID = game_id
+    _reset_game_state()
+    sio.on(f"game[{game_id}]:stateChange", on_state_change)
+    sio.emit("game:rejoin", {"gameId": game_id})
+    print(f"Joined game {game_id}.")
+
+
+def _join_queue():
+    global GAME_ID
+    GAME_ID = None
+    print(f"Joining matchmaking queue (format={FORMAT})...")
+    ack = _emit_sync("matchmaking:join", {
+        "format": FORMAT,
+        "deck": bot_deck,
+        "deckId": deck_id,
+    })
+    if _is_rejection(ack):
+        print(f"Failed to join queue: {ack}")
+    else:
+        print("In queue. Waiting for a match...")
+
+
 sio = socketio.Client()
-sio.on(f"game[{GAME_ID}]:stateChange", on_state_change)
+
+
+@sio.on("matchmaking:gameCreated")
+def on_matchmaking_game_created(data):
+    if args.invite or args.game_id is not None:
+        return
+    print(f"\nMatch found! Game ID: {data.get('gameId')}")
+    _join_game(data.get("gameId"))
+
+
+@sio.on("core:createGame")
+def on_core_create_game(data):
+    if not args.invite:
+        return
+    if not any(p.get("name") == USERNAME for p in data.get("players", [])):
+        return  # game doesn't involve this bot
+    print(f"\nGame invitation received! Game ID: {data.get('gameId')}")
+    _join_game(data.get("gameId"))
 
 
 @sio.event
 def connect():
     print("Connected to Twinleaf server!")
-    sio.emit("game:rejoin", {"gameId": GAME_ID})
-    print(f"Rejoined game {GAME_ID}.")
+    if args.game_id is not None:
+        _join_game(args.game_id)
+    elif args.invite:
+        print(f"Waiting for someone to challenge {USERNAME}...")
+    else:
+        _join_queue()
 
 
 @sio.event
